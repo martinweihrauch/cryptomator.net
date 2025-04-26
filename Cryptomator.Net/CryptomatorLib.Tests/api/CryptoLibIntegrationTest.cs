@@ -2,6 +2,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using CryptomatorLib.Api;
 using CryptomatorLib.Common;
 using CryptomatorLib.Tests.Common;
+using CryptomatorLib.Tests.Streams;
 using CryptomatorLib.V3;
 using System;
 using System.Buffers;

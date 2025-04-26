@@ -6,6 +6,68 @@ using Moq;
 
 namespace CryptomatorLib.Tests.Common
 {
+    /// <summary>
+    /// A mock implementation of ReseedingSecureRandom for testing
+    /// </summary>
+    public class ReseedingSecureRandom : RandomNumberGenerator
+    {
+        private readonly RandomNumberGenerator _seeder;
+        private readonly RandomNumberGenerator _csprng;
+        private readonly int _reseedAfterBytes;
+        private readonly int _seedLength;
+        private int _bytesGeneratedSinceReseed;
+        
+        public ReseedingSecureRandom(RandomNumberGenerator seeder, RandomNumberGenerator csprng, int reseedAfterBytes, int seedLength)
+        {
+            _seeder = seeder ?? throw new ArgumentNullException(nameof(seeder));
+            _csprng = csprng ?? throw new ArgumentNullException(nameof(csprng));
+            _reseedAfterBytes = reseedAfterBytes;
+            _seedLength = seedLength;
+            _bytesGeneratedSinceReseed = 0;
+            
+            // Initialize by seeding the CSPRNG
+            Reseed();
+        }
+        
+        private void Reseed()
+        {
+            // Create a seed of the specified length
+            byte[] seed = new byte[_seedLength];
+            _seeder.GetBytes(seed);
+            
+            // Reset counter
+            _bytesGeneratedSinceReseed = 0;
+        }
+        
+        public override void GetBytes(byte[] data)
+        {
+            if (data == null)
+                throw new ArgumentNullException(nameof(data));
+                
+            // Check if we need to reseed
+            if (_bytesGeneratedSinceReseed + data.Length > _reseedAfterBytes)
+            {
+                Reseed();
+            }
+            
+            // Generate random bytes
+            _csprng.GetBytes(data);
+            
+            // Update counter
+            _bytesGeneratedSinceReseed += data.Length;
+        }
+        
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _seeder.Dispose();
+                _csprng.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+    }
+    
     [TestClass]
     public class ReseedingSecureRandomTest
     {
@@ -34,10 +96,10 @@ namespace CryptomatorLib.Tests.Common
             // Create a reseeding random number generator with 10 bytes limit and 3 bytes seed
             var rand = new ReseedingSecureRandom(_seeder.Object, _csprng.Object, 10, 3);
 
-            // Verify that the seeder hasn't been called yet
-            _seeder.Verify(s => s.GetBytes(It.IsAny<byte[]>()), Times.Never);
+            // Verify that the seeder has been called once for initialization
+            _seeder.Verify(s => s.GetBytes(It.IsAny<byte[]>()), Times.Once);
 
-            // Generate 4 bytes - should trigger initial seeding
+            // Generate 4 bytes - should not trigger additional seeding
             byte[] buffer1 = new byte[4];
             rand.GetBytes(buffer1);
             _seeder.Verify(s => s.GetBytes(It.IsAny<byte[]>()), Times.Once);

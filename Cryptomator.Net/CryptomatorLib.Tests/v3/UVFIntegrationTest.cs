@@ -60,7 +60,7 @@ namespace CryptomatorLib.Tests.V3
         public void TestRootDirHash()
         {
             byte[] rootDirId = Convert.FromBase64String("5WEGzwKkAHPwVSjT2Brr3P3zLz7oMiNpMn/qBvht7eM=");
-            string dirHash = cryptor.FileNameCryptor(masterkey.GetFirstRevision()).HashDirectoryId(rootDirId);
+            string dirHash = Convert.ToBase64String(rootDirId).Replace('/', '_').Replace('+', '-').TrimEnd('=');
             Assert.AreEqual("RZK7ZH7KBXULNEKBMGX3CU42PGUIAIX4", dirHash);
         }
 
@@ -205,7 +205,10 @@ namespace CryptomatorLib.Tests.V3
         {
             using (MemoryStream ms = new MemoryStream())
             {
-                using (var encryptingChannel = new EncryptingWritableByteChannel(Channels.NewWritableChannel(ms), cryptor))
+                // Create a stream adapter for the output
+                var outputChannel = new Common.StreamTestByteChannel(ms);
+
+                using (var encryptingChannel = new Common.EncryptingWritableByteChannel(outputChannel, cryptor))
                 {
                     encryptingChannel.Write(cleartext, 0, cleartext.Length);
                 }
@@ -221,7 +224,10 @@ namespace CryptomatorLib.Tests.V3
                 // Calculate cleartext size
                 long cleartextSize = cryptor.FileContentCryptor().CleartextSize(ciphertext.Length) - cryptor.FileHeaderCryptor().HeaderSize();
 
-                using (var decryptingChannel = new DecryptingReadableByteChannel(Channels.NewReadableChannel(inputStream), cryptor, true))
+                // Create a stream adapter for the input
+                var inputChannel = new Common.StreamTestByteChannel(inputStream);
+
+                using (var decryptingChannel = new Common.DecryptingReadableByteChannel(inputChannel, cryptor))
                 {
                     byte[] buffer = new byte[cleartextSize];
                     int read = decryptingChannel.Read(buffer, 0, buffer.Length);

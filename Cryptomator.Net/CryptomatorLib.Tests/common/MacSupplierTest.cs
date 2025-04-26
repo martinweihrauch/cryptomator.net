@@ -45,18 +45,16 @@ namespace CryptomatorLib.Tests.Common
             // Create a key for HMAC
             byte[] keyData = new byte[16]; // 128-bit key
 
-            // Get a MAC from the supplier with lease
-            using (var lease1 = MacSupplier.HMAC_SHA256.Keyed(keyData))
+            // Get a MAC from the supplier
+            using (var mac1 = MacSupplier.HMAC_SHA256.CreateMac(keyData))
             {
-                Assert.IsNotNull(lease1);
-                Assert.IsNotNull(lease1.Get());
+                Assert.IsNotNull(mac1);
             }
 
             // Get another MAC from the supplier (should be pooled and reused)
-            using (var lease2 = MacSupplier.HMAC_SHA256.Keyed(keyData))
+            using (var mac2 = MacSupplier.HMAC_SHA256.CreateMac(keyData))
             {
-                Assert.IsNotNull(lease2);
-                Assert.IsNotNull(lease2.Get());
+                Assert.IsNotNull(mac2);
             }
         }
 

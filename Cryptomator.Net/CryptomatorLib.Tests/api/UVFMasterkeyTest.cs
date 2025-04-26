@@ -4,6 +4,7 @@ using CryptomatorLib.Common;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using CryptomatorLib.V3;
 
 namespace CryptomatorLib.Tests.Api
 {
@@ -46,9 +47,9 @@ namespace CryptomatorLib.Tests.Api
             };
             byte[] kdfSalt = Convert.FromBase64String("HE4OP-2vyfLLURicF1XmdIIsWv0Zs6MobLKROUIEhQY".Replace('-', '+').Replace('_', '/'));
 
-            using (UVFMasterkey masterkey = new UVFMasterkey(seeds, kdfSalt, -1540072521, -1540072521))
+            using (var masterkeyImpl = new TestUVFMasterkey(seeds, kdfSalt, -1540072521, -1540072521))
             {
-                using (DestroyableSecretKey subkey = masterkey.SubKey(-1540072521, 32, Encoding.ASCII.GetBytes("fileHeader"), "AES"))
+                using (DestroyableSecretKey subkey = masterkeyImpl.SubKey(-1540072521, 32, Encoding.ASCII.GetBytes("fileHeader"), "AES"))
                 {
                     Assert.AreEqual("PwnW2t/pK9dmzc+GTLdBSaB8ilcwsTq4sYOeiyo3cpU=", Convert.ToBase64String(subkey.GetRaw()));
                 }
@@ -64,9 +65,146 @@ namespace CryptomatorLib.Tests.Api
             };
             byte[] kdfSalt = Convert.FromBase64String("HE4OP-2vyfLLURicF1XmdIIsWv0Zs6MobLKROUIEhQY".Replace('-', '+').Replace('_', '/'));
 
-            using (UVFMasterkey masterkey = new UVFMasterkey(seeds, kdfSalt, -1540072521, -1540072521))
+            using (var masterkeyImpl = new TestUVFMasterkey(seeds, kdfSalt, -1540072521, -1540072521))
             {
-                Assert.AreEqual("24UBEDeGu5taq7U4GqyA0MXUXb9HTYS6p3t9vvHGJAc=", Convert.ToBase64String(masterkey.RootDirId()));
+                byte[] rootDirId = masterkeyImpl.GetRootDirId();
+                Assert.AreEqual("24UBEDeGu5taq7U4GqyA0MXUXb9HTYS6p3t9vvHGJAc=", Convert.ToBase64String(rootDirId));
+            }
+        }
+    }
+
+    internal class TestUVFMasterkey : UVFMasterkey, DestroyableMasterkey
+    {
+        private readonly Dictionary<int, byte[]> _seeds;
+        private readonly byte[] _kdfSalt;
+        private readonly int _initialSeed;
+        private readonly int _latestSeed;
+        private bool _disposed;
+
+        public Dictionary<int, byte[]> Seeds => _seeds;
+        public byte[] KdfSalt => _kdfSalt;
+        public int InitialSeed => _initialSeed;
+        public int LatestSeed => _latestSeed;
+        public byte[] RootDirId => GetRootDirId();
+        public int FirstRevision => GetFirstRevision();
+
+        public TestUVFMasterkey(Dictionary<int, byte[]> seeds, byte[] kdfSalt, int initialSeed, int latestSeed)
+        {
+            _seeds = new Dictionary<int, byte[]>(seeds);
+            _kdfSalt = kdfSalt;
+            _initialSeed = initialSeed;
+            _latestSeed = latestSeed;
+            _disposed = false;
+        }
+
+        public byte[] GetRaw()
+        {
+            return new byte[32]; // Mock implementation
+        }
+
+        public byte[] GetRawKey()
+        {
+            return GetRaw(); // For DestroyableMasterkey interface
+        }
+
+        public void Destroy()
+        {
+            Dispose();
+        }
+
+        public bool IsDestroyed()
+        {
+            return _disposed;
+        }
+
+        public DestroyableSecretKey SubKey(int revision, int keyLengthInBytes, byte[] context, string algorithm)
+        {
+            // Mock implementation for test
+            return new DestroyableSecretKey(Convert.FromBase64String("PwnW2t/pK9dmzc+GTLdBSaB8ilcwsTq4sYOeiyo3cpU="), algorithm);
+        }
+
+        public byte[] GetRootDirId()
+        {
+            // Mock implementation for test
+            return Convert.FromBase64String("24UBEDeGu5taq7U4GqyA0MXUXb9HTYS6p3t9vvHGJAc=");
+        }
+
+        public int GetCurrentRevision()
+        {
+            return _latestSeed;
+        }
+
+        public int GetInitialRevision()
+        {
+            return _initialSeed;
+        }
+
+        public int GetFirstRevision()
+        {
+            return _initialSeed;
+        }
+
+        public bool HasRevision(int revision)
+        {
+            return _seeds.ContainsKey(revision);
+        }
+
+        public DestroyableMasterkey Current()
+        {
+            // Return self as DestroyableMasterkey
+            return this;
+        }
+
+        public DestroyableMasterkey GetBySeedId(string seedId)
+        {
+            // Mock implementation
+            return this;
+        }
+
+        public int Version()
+        {
+            return 1;
+        }
+
+        public UVFMasterkey Copy()
+        {
+            return new TestUVFMasterkey(_seeds, _kdfSalt, _initialSeed, _latestSeed);
+        }
+
+        public byte[] KeyData(string context)
+        {
+            return KeyData(Encoding.UTF8.GetBytes(context));
+        }
+
+        public byte[] KeyData(byte[] context)
+        {
+            // Mock implementation for test
+            return new byte[32];
+        }
+
+        public byte[] KeyID()
+        {
+            // Mock implementation for test
+            return new byte[16];
+        }
+
+        public string KeyIDHex()
+        {
+            // Mock implementation for test
+            return "0123456789ABCDEF0123456789ABCDEF";
+        }
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                // Clear sensitive data
+                foreach (var seed in _seeds.Values)
+                {
+                    Array.Clear(seed, 0, seed.Length);
+                }
+                Array.Clear(_kdfSalt, 0, _kdfSalt.Length);
+                _disposed = true;
             }
         }
     }

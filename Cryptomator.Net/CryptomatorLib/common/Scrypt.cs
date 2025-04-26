@@ -1,5 +1,6 @@
 using System;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace CryptomatorLib.Common
 {
@@ -13,6 +14,44 @@ namespace CryptomatorLib.Common
         private const int DEFAULT_LOG_N = 17; // 2^17 = 131,072
         private const int DEFAULT_R = 8;
         private const int DEFAULT_P = 1;
+
+        /// <summary>
+        /// Derives a key using the scrypt algorithm with the parameters specified in the test cases.
+        /// </summary>
+        /// <param name="password">The password as a string</param>
+        /// <param name="salt">The salt</param>
+        /// <param name="n">The CPU/memory cost parameter (N)</param>
+        /// <param name="r">The block size parameter</param>
+        /// <param name="dkLen">The desired key length</param>
+        /// <returns>The derived key</returns>
+        public static byte[] ScryptDeriveBytes(string password, byte[] salt, int n, int r, int dkLen)
+        {
+            if (n < 2 || (n & (n - 1)) != 0)
+            {
+                throw new ArgumentException("N must be a power of 2 greater than 1");
+            }
+            if (r <= 0)
+            {
+                throw new ArgumentException("r must be positive");
+            }
+            if (dkLen <= 0)
+            {
+                throw new ArgumentException("dkLen must be positive");
+            }
+
+            byte[] passwordBytes = password != null ? Encoding.UTF8.GetBytes(password) : Array.Empty<byte>();
+            
+            try
+            {
+                int logN = (int)Math.Log(n, 2);
+                return DeriveKey(passwordBytes, salt, dkLen, logN, r, DEFAULT_P);
+            }
+            finally
+            {
+                // Clear password bytes for security
+                Array.Clear(passwordBytes, 0, passwordBytes.Length);
+            }
+        }
 
         /// <summary>
         /// Derives a key using the scrypt algorithm with default parameters.

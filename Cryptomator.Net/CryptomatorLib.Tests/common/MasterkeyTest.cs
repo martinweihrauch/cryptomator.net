@@ -3,6 +3,7 @@ using CryptomatorLib.Common;
 using System;
 using System.Text;
 using System.Security.Cryptography;
+using CryptomatorLib.Tests.Common.TestUtilities;
 
 namespace CryptomatorLib.Tests.Common
 {

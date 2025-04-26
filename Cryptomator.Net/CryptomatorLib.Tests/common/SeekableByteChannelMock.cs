@@ -5,40 +5,31 @@ using CryptomatorLib.Common;
 namespace CryptomatorLib.Tests.Common
 {
     /// <summary>
-    /// A mock implementation of ISeekableByteChannel for testing purposes.
+    /// Mock implementation of a seekable byte channel for testing
     /// </summary>
-    public class SeekableByteChannelMock : ISeekableByteChannel
+    public class SeekableByteChannelMock : ISeekableByteChannel, IDisposable
     {
-        private bool _open = true;
-        private readonly MemoryStream _buffer;
-
-        /// <summary>
-        /// Creates a new SeekableByteChannelMock with the given buffer.
-        /// </summary>
-        /// <param name="buffer">The underlying buffer to use</param>
-        public SeekableByteChannelMock(MemoryStream buffer)
+        private readonly MemoryStream _memoryStream;
+        private bool _isOpen = true;
+        
+        public SeekableByteChannelMock(byte[] data)
         {
-            _buffer = buffer ?? throw new ArgumentNullException(nameof(buffer));
+            _memoryStream = new MemoryStream(data);
+        }
+        
+        public MemoryStream GetStream()
+        {
+            return _memoryStream;
         }
 
-        /// <summary>
-        /// Creates a new SeekableByteChannelMock with a new buffer of the given size.
-        /// </summary>
-        /// <param name="size">The size of the buffer in bytes</param>
-        public SeekableByteChannelMock(int size)
-        {
-            _buffer = new MemoryStream(size);
-        }
-
-        /// <inheritdoc />
-        public bool IsOpen => _open;
+        public bool IsOpen => _isOpen && _memoryStream.CanRead;
 
         public long CurrentPosition
         {
             get
             {
-                EnsureOpen();
-                return _buffer.Position;
+                if (!_isOpen) throw new ObjectDisposedException(nameof(SeekableByteChannelMock));
+                return _memoryStream.Position;
             }
         }
 
@@ -46,104 +37,62 @@ namespace CryptomatorLib.Tests.Common
         {
             get
             {
-                EnsureOpen();
-                return _buffer.Length;
+                if (!_isOpen) throw new ObjectDisposedException(nameof(SeekableByteChannelMock));
+                return _memoryStream.Length;
             }
         }
-
-        /// <inheritdoc />
-        public void Close()
-        {
-            _open = false;
-            _buffer.Close();
-        }
-
-        /// <inheritdoc />
-        public int Read(byte[] dst, int offset, int count)
-        {
-            EnsureOpen();
-
-            if (!HasRemaining())
-            {
-                return -1;
-            }
-
-            int num = (int)Math.Min(_buffer.Length - _buffer.Position, count);
-            int bytesRead = _buffer.Read(dst, offset, num);
-            return bytesRead;
-        }
-
-        /// <inheritdoc />
-        public int Write(byte[] src, int offset, int count)
-        {
-            EnsureOpen();
-
-            int num = (int)Math.Min(_buffer.Length - _buffer.Position, count);
-            _buffer.Write(src, offset, num);
-            return num;
-        }
-
-        /// <inheritdoc />
-        public long Seek(long position)
-        {
-            EnsureOpen();
-            return _buffer.Seek(position, SeekOrigin.Begin);
-        }
-
-        /// <inheritdoc />
+        
         public long Position()
         {
-            EnsureOpen();
-            return _buffer.Position;
+            if (!_isOpen) throw new ObjectDisposedException(nameof(SeekableByteChannelMock));
+            return _memoryStream.Position;
         }
-
-        /// <inheritdoc />
+        
         public ISeekableByteChannel Position(long newPosition)
         {
-            EnsureOpen();
-
-            _buffer.Position = newPosition;
+            if (!_isOpen) throw new ObjectDisposedException(nameof(SeekableByteChannelMock));
+            _memoryStream.Position = newPosition;
             return this;
         }
-
-        /// <inheritdoc />
+        
+        public int Read(byte[] buffer, int offset, int count)
+        {
+            if (!_isOpen) throw new ObjectDisposedException(nameof(SeekableByteChannelMock));
+            return _memoryStream.Read(buffer, offset, count);
+        }
+        
+        public int Write(byte[] buffer, int offset, int count)
+        {
+            if (!_isOpen) throw new ObjectDisposedException(nameof(SeekableByteChannelMock));
+            _memoryStream.Write(buffer, offset, count);
+            return count;
+        }
+        
+        public long Seek(long position)
+        {
+            if (!_isOpen) throw new ObjectDisposedException(nameof(SeekableByteChannelMock));
+            return _memoryStream.Seek(position, SeekOrigin.Begin);
+        }
+        
         public long Size()
         {
-            EnsureOpen();
-            return _buffer.Length;
+            if (!_isOpen) throw new ObjectDisposedException(nameof(SeekableByteChannelMock));
+            return _memoryStream.Length;
         }
-
-        /// <inheritdoc />
-        public ISeekableByteChannel Truncate(long size)
+        
+        public void Close()
         {
-            EnsureOpen();
-
-            if (size < _buffer.Position)
+            if (_isOpen)
             {
-                _buffer.Position = size;
-            }
-
-            _buffer.SetLength(size);
-            return this;
-        }
-
-        private bool HasRemaining()
-        {
-            return _buffer.Position < _buffer.Length;
-        }
-
-        private void EnsureOpen()
-        {
-            if (!_open)
-            {
-                throw new IOException("Channel is closed");
+                _memoryStream.Close();
+                _isOpen = false;
             }
         }
-
-        /// <inheritdoc />
+        
         public void Dispose()
         {
             Close();
+            GC.SuppressFinalize(this);
         }
     }
 }

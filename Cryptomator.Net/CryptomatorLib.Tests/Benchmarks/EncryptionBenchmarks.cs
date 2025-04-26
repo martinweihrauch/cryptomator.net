@@ -3,6 +3,7 @@ using System.Text;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Order;
 using CryptomatorLib.Api;
+using CryptomatorLib.Common;
 
 namespace CryptomatorLib.Tests.Benchmarks
 {

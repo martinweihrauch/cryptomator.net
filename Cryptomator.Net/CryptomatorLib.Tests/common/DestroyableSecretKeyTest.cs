@@ -44,10 +44,10 @@ namespace CryptomatorLib.Tests.Common
 
             // Test equals
             Assert.AreEqual(key1, key2);
-            Assert.AreNotEqual(key1, key3);
-            Assert.AreNotEqual(key1, key4);
-            Assert.AreNotEqual(key1, null);
-            Assert.AreNotEqual(key1, "not a key");
+            Assert.AreNotEqual<object>(key1, key3);
+            Assert.AreNotEqual<object>(key1, key4);
+            Assert.AreNotEqual<object>(key1, null);
+            Assert.AreNotEqual<object>(key1, "not a key");
 
             // Test hashCode
             Assert.AreEqual(key1.GetHashCode(), key2.GetHashCode());

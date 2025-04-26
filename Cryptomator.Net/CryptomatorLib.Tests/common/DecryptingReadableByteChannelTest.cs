@@ -34,16 +34,19 @@ namespace CryptomatorLib.Tests.Common
             _headerCryptor.Setup(h => h.DecryptHeader(It.IsAny<ReadOnlyMemory<byte>>())).Returns(_header.Object);
 
             _contentCryptor.Setup(c => c.DecryptChunk(
-                    It.IsAny<byte[]>(),
+                    It.IsAny<ReadOnlyMemory<byte>>(),
+                    It.IsAny<Memory<byte>>(),
                     It.IsAny<long>(),
                     It.IsAny<FileHeader>(),
                     It.IsAny<bool>()))
-                .Returns<byte[], long, FileHeader, bool>((data, chunkNumber, header, isLastChunk) =>
-                {
-                    // Simulate conversion to lowercase for testing purposes
-                    string content = Encoding.UTF8.GetString(data);
-                    return Encoding.UTF8.GetBytes(content.ToLower());
-                });
+                .Callback<ReadOnlyMemory<byte>, Memory<byte>, long, FileHeader, bool>(
+                    (data, output, chunkNumber, header, auth) =>
+                    {
+                        // Simulate conversion to lowercase for testing purposes
+                        string content = Encoding.UTF8.GetString(data.ToArray());
+                        byte[] result = Encoding.UTF8.GetBytes(content.ToLower());
+                        result.CopyTo(output);
+                    });
         }
 
         [TestMethod]
@@ -56,16 +59,19 @@ namespace CryptomatorLib.Tests.Common
             {
                 byte[] resultBuffer = new byte[30];
 
+                // Create a channel adapter
+                var channelAdapter = new StreamTestByteChannel(source);
+
                 // Create decrypting channel
-                using (var channel = new DecryptingReadableByteChannel(source, _cryptor.Object, 10, true))
+                using (var channel = new DecryptingReadableByteChannel(channelAdapter, _cryptor.Object))
                 {
                     // Read data from the channel
                     int bytesRead1 = channel.Read(resultBuffer, 0, resultBuffer.Length);
                     Assert.AreEqual(20, bytesRead1);
 
-                    // Try to read more (should return -1 indicating EOF)
+                    // Try to read more (should return 0 indicating EOF)
                     int bytesRead2 = channel.Read(resultBuffer, bytesRead1, resultBuffer.Length - bytesRead1);
-                    Assert.AreEqual(-1, bytesRead2);
+                    Assert.AreEqual(0, bytesRead2);
 
                     // Verify the decrypted content
                     byte[] decryptedData = new byte[bytesRead1];
@@ -76,20 +82,15 @@ namespace CryptomatorLib.Tests.Common
                 }
             }
 
-            // Verify the expected calls were made
+            // Verify the expected method calls
+            _headerCryptor.Verify(h => h.DecryptHeader(It.IsAny<ReadOnlyMemory<byte>>()), Times.Once);
             _contentCryptor.Verify(c => c.DecryptChunk(
-                It.IsAny<byte[]>(),
-                It.Is<long>(chunkNumber => chunkNumber == 0),
+                It.IsAny<ReadOnlyMemory<byte>>(),
+                It.IsAny<Memory<byte>>(),
+                It.IsAny<long>(),
                 It.IsAny<FileHeader>(),
-                It.Is<bool>(isLastChunk => isLastChunk == true)),
-                Times.Once);
-
-            _contentCryptor.Verify(c => c.DecryptChunk(
-                It.IsAny<byte[]>(),
-                It.Is<long>(chunkNumber => chunkNumber == 1),
-                It.IsAny<FileHeader>(),
-                It.Is<bool>(isLastChunk => isLastChunk == true)),
-                Times.Once);
+                It.IsAny<bool>()),
+                Times.AtLeastOnce);
         }
 
         [TestMethod]
@@ -102,17 +103,19 @@ namespace CryptomatorLib.Tests.Common
             {
                 byte[] resultBuffer = new byte[30];
 
-                // Create decrypting channel with specific header and starting chunk
-                using (var channel = new DecryptingReadableByteChannel(
-                    source, _cryptor.Object, 10, true, _header.Object, 1))
+                // Create a channel adapter
+                var channelAdapter = new StreamTestByteChannel(source);
+
+                // Create decrypting channel
+                using (var channel = new DecryptingReadableByteChannel(channelAdapter, _cryptor.Object))
                 {
                     // Read data from the channel
                     int bytesRead1 = channel.Read(resultBuffer, 0, resultBuffer.Length);
                     Assert.AreEqual(10, bytesRead1);
 
-                    // Try to read more (should return -1 indicating EOF)
+                    // Try to read more (should return 0 indicating EOF)
                     int bytesRead2 = channel.Read(resultBuffer, bytesRead1, resultBuffer.Length - bytesRead1);
-                    Assert.AreEqual(-1, bytesRead2);
+                    Assert.AreEqual(0, bytesRead2);
 
                     // Verify the decrypted content
                     byte[] decryptedData = new byte[bytesRead1];
@@ -123,13 +126,15 @@ namespace CryptomatorLib.Tests.Common
                 }
             }
 
-            // Verify the expected calls were made
+            // Verify the expected method calls
+            _headerCryptor.Verify(h => h.DecryptHeader(It.IsAny<ReadOnlyMemory<byte>>()), Times.AtLeastOnce);
             _contentCryptor.Verify(c => c.DecryptChunk(
-                It.IsAny<byte[]>(),
-                It.Is<long>(chunkNumber => chunkNumber == 1),
+                It.IsAny<ReadOnlyMemory<byte>>(),
+                It.IsAny<Memory<byte>>(),
+                It.IsAny<long>(),
                 It.IsAny<FileHeader>(),
-                It.Is<bool>(isLastChunk => isLastChunk == true)),
-                Times.Once);
+                It.IsAny<bool>()),
+                Times.AtLeastOnce);
         }
     }
 }

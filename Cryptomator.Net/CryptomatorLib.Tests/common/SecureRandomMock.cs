@@ -4,66 +4,40 @@ using System.Security.Cryptography;
 namespace CryptomatorLib.Tests.Common
 {
     /// <summary>
-    /// A mock for SecureRandom that can be used in tests.
+    /// A mock for RandomNumberGenerator that always returns zeros.
     /// </summary>
     public class SecureRandomMock : RandomNumberGenerator
     {
         /// <summary>
-        /// A "random" generator that always returns zeros
+        /// A RandomNumberGenerator that always generates zeros.
         /// </summary>
-        public static readonly SecureRandomMock NULL_RANDOM = new SecureRandomMock(false);
-
-        /// <summary>
-        /// A "random" generator that always returns ones (0xFF bytes)
-        /// </summary>
-        public static readonly SecureRandomMock FULL_RANDOM = new SecureRandomMock(true);
-
-        private readonly bool _fillWithOnes;
-
-        public SecureRandomMock(bool fillWithOnes)
+        public static readonly RandomNumberGenerator NULL_RANDOM = new SecureRandomMock();
+        
+        private SecureRandomMock()
         {
-            _fillWithOnes = fillWithOnes;
         }
-
+        
+        /// <summary>
+        /// Fills the provided buffer with zeros.
+        /// </summary>
+        /// <param name="data">The buffer to fill</param>
         public override void GetBytes(byte[] data)
         {
             if (data == null)
+            {
                 throw new ArgumentNullException(nameof(data));
-
-            if (_fillWithOnes)
-            {
-                for (int i = 0; i < data.Length; i++)
-                {
-                    data[i] = 0xFF;
-                }
             }
-            else
-            {
-                // Fill with zeros (already the default for a new byte array)
-                Array.Clear(data, 0, data.Length);
-            }
+            
+            Array.Clear(data, 0, data.Length);
         }
-
-        public override void GetNonZeroBytes(byte[] data)
+        
+        /// <summary>
+        /// Fills the provided span with zeros.
+        /// </summary>
+        /// <param name="data">The span to fill</param>
+        public override void GetBytes(Span<byte> data)
         {
-            if (data == null)
-                throw new ArgumentNullException(nameof(data));
-
-            if (_fillWithOnes)
-            {
-                for (int i = 0; i < data.Length; i++)
-                {
-                    data[i] = 0xFF;
-                }
-            }
-            else
-            {
-                // For NULL_RANDOM, still need to return non-zero bytes
-                for (int i = 0; i < data.Length; i++)
-                {
-                    data[i] = 0x01;
-                }
-            }
+            data.Clear();
         }
     }
 }

@@ -1,30 +1,80 @@
 using System;
+using CryptomatorLib.Common;
 
 namespace CryptomatorLib.Api
 {
     /// <summary>
-    /// A master key that doesn't have a notion of versioning. Used for legacy vault formats where
-    /// a single key is used for the entire vault, regardless of its lifetime.
+    /// A masterkey that lasts forever, i.e. does not expire.
     /// </summary>
-    public interface PerpetualMasterkey : Masterkey
+    public class PerpetualMasterkey : Masterkey, IDisposable
     {
         /// <summary>
-        /// Creates a new instance using given raw key material.
+        /// The encryption algorithm used for the masterkey.
+        /// </summary>
+        public const string ENC_ALG = "AES";
+        
+        /// <summary>
+        /// The MAC algorithm used for the masterkey.
+        /// </summary>
+        public const string MAC_ALG = "HmacSHA256";
+        
+        private byte[] _rawKey;
+        private bool _destroyed;
+        
+        /// <summary>
+        /// Creates a new perpetual masterkey with the given raw key.
         /// </summary>
         /// <param name="rawKey">The raw key material</param>
-        /// <returns>A new PerpetualMasterkey instance</returns>
-        /// <exception cref="ArgumentNullException">If rawKey is null</exception>
-        /// <exception cref="ArgumentException">If rawKey is invalid</exception>
-        public static PerpetualMasterkey CreateFromRaw(byte[] rawKey)
+        public PerpetualMasterkey(byte[] rawKey)
         {
-            throw new NotImplementedException("Implementation classes need to override this method");
+            _rawKey = rawKey ?? throw new ArgumentNullException(nameof(rawKey));
+            _destroyed = false;
+        }
+
+        /// <summary>
+        /// Gets a copy of the raw key material. Caller is responsible for zeroing out the memory when done.
+        /// </summary>
+        /// <returns>The raw key material</returns>
+        public byte[] GetRaw()
+        {
+            if (_destroyed)
+            {
+                throw new InvalidOperationException("Masterkey has been destroyed");
+            }
+            
+            byte[] result = new byte[_rawKey.Length];
+            Buffer.BlockCopy(_rawKey, 0, result, 0, _rawKey.Length);
+            return result;
+        }
+
+        /// <summary>
+        /// Securely destroys the key material.
+        /// </summary>
+        public void Destroy()
+        {
+            if (!_destroyed)
+            {
+                Array.Clear(_rawKey, 0, _rawKey.Length);
+                _destroyed = true;
+            }
+        }
+
+        /// <summary>
+        /// Checks if the key has been destroyed.
+        /// </summary>
+        /// <returns>True if the key has been destroyed, false otherwise</returns>
+        public bool IsDestroyed()
+        {
+            return _destroyed;
         }
         
         /// <summary>
-        /// Copies this key.
+        /// Disposes the masterkey, calling Destroy().
         /// </summary>
-        /// <returns>A new independent copy of this key</returns>
-        /// <exception cref="InvalidOperationException">If this key has been destroyed</exception>
-        PerpetualMasterkey Copy();
+        public void Dispose()
+        {
+            Destroy();
+            GC.SuppressFinalize(this);
+        }
     }
 } 

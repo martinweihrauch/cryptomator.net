@@ -11,7 +11,6 @@ namespace CryptomatorLib.Tests.Common
     [TestClass]
     public class EncryptingWritableByteChannelTest
     {
-        private MemoryStream _dstFile;
         private Mock<Cryptor> _cryptor;
         private Mock<FileContentCryptor> _contentCryptor;
         private Mock<FileHeaderCryptor> _headerCryptor;
@@ -20,29 +19,29 @@ namespace CryptomatorLib.Tests.Common
         [TestInitialize]
         public void Setup()
         {
-            _dstFile = new MemoryStream(100);
             _cryptor = new Mock<Cryptor>();
             _contentCryptor = new Mock<FileContentCryptor>();
             _headerCryptor = new Mock<FileHeaderCryptor>();
             _header = new Mock<FileHeader>();
 
-            _cryptor.Setup(c => c.GetFileContentCryptor()).Returns(_contentCryptor.Object);
-            _cryptor.Setup(c => c.GetFileHeaderCryptor()).Returns(_headerCryptor.Object);
+            _cryptor.Setup(c => c.FileContentCryptor()).Returns(_contentCryptor.Object);
+            _cryptor.Setup(c => c.FileHeaderCryptor()).Returns(_headerCryptor.Object);
 
-            _contentCryptor.Setup(c => c.GetCleartextChunkSize()).Returns(10);
+            _contentCryptor.Setup(c => c.CleartextChunkSize()).Returns(10);
+            _contentCryptor.Setup(c => c.CiphertextChunkSize()).Returns(20);
 
             _headerCryptor.Setup(h => h.Create()).Returns(_header.Object);
-            _headerCryptor.Setup(h => h.EncryptHeader(_header.Object)).Returns(Encoding.UTF8.GetBytes("hhhhh"));
+            _headerCryptor.Setup(h => h.EncryptHeader(_header.Object)).Returns(new Memory<byte>(Encoding.UTF8.GetBytes("hhhhh")));
 
             _contentCryptor.Setup(c => c.EncryptChunk(
-                    It.IsAny<byte[]>(),
+                    It.IsAny<ReadOnlyMemory<byte>>(),
                     It.IsAny<long>(),
                     It.IsAny<FileHeader>()))
-                .Returns<byte[], long, FileHeader>((data, chunkNumber, header) =>
+                .Returns<ReadOnlyMemory<byte>, long, FileHeader>((data, chunkNumber, header) =>
                 {
                     // Simulate conversion to uppercase and wrapping with < > for testing
-                    string content = Encoding.UTF8.GetString(data);
-                    return Encoding.UTF8.GetBytes("<" + content.ToUpper() + ">");
+                    string content = Encoding.UTF8.GetString(data.ToArray());
+                    return new Memory<byte>(Encoding.UTF8.GetBytes("<" + content.ToUpper() + ">"));
                 });
         }
 
@@ -50,7 +49,10 @@ namespace CryptomatorLib.Tests.Common
         [DisplayName("Test Encryption")]
         public void TestEncryption()
         {
-            using (var channel = new EncryptingWritableByteChannel(_dstFile, _cryptor.Object))
+            using var dstFile = new MemoryStream(100);
+            var testChannel = new StreamTestByteChannel(dstFile);
+            
+            using (var channel = new EncryptingWritableByteChannel(testChannel, _cryptor.Object))
             {
                 byte[] data1 = Encoding.UTF8.GetBytes("hello world 1");
                 channel.Write(data1, 0, data1.Length);
@@ -60,11 +62,11 @@ namespace CryptomatorLib.Tests.Common
             }
 
             // Reset stream position to beginning for reading
-            _dstFile.Position = 0;
+            dstFile.Position = 0;
 
             // Read the encrypted content
             byte[] resultBuffer = new byte[100];
-            int bytesRead = _dstFile.Read(resultBuffer, 0, resultBuffer.Length);
+            int bytesRead = dstFile.Read(resultBuffer, 0, resultBuffer.Length);
             string encrypted = Encoding.UTF8.GetString(resultBuffer, 0, bytesRead);
 
             // Verify the expected encrypted content
@@ -75,17 +77,20 @@ namespace CryptomatorLib.Tests.Common
         [DisplayName("Test Encryption Of Empty File")]
         public void TestEncryptionOfEmptyFile()
         {
-            using (var channel = new EncryptingWritableByteChannel(_dstFile, _cryptor.Object))
+            using var dstFile = new MemoryStream(100);
+            var testChannel = new StreamTestByteChannel(dstFile);
+            
+            using (var channel = new EncryptingWritableByteChannel(testChannel, _cryptor.Object))
             {
                 // Empty, so write nothing
             }
 
             // Reset stream position to beginning for reading
-            _dstFile.Position = 0;
+            dstFile.Position = 0;
 
             // Read the encrypted content
             byte[] resultBuffer = new byte[100];
-            int bytesRead = _dstFile.Read(resultBuffer, 0, resultBuffer.Length);
+            int bytesRead = dstFile.Read(resultBuffer, 0, resultBuffer.Length);
             string encrypted = Encoding.UTF8.GetString(resultBuffer, 0, bytesRead);
 
             // Verify the expected encrypted content (header + empty chunk)

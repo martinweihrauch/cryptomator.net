@@ -1,7 +1,7 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using CryptomatorLib.Api;
 using CryptomatorLib.Common;
-using CryptomatorLib.Tests.Common;
+using CryptomatorLib.Tests.Common.TestUtilities;
 using Moq;
 using System;
 using System.IO;
@@ -154,7 +154,7 @@ namespace CryptomatorLib.Tests.Common
             [DisplayName("Test Unlock With Correct Password")]
             public void TestUnlockWithCorrectPassword()
             {
-                Masterkey key = _masterkeyFileAccess.Unlock(_keyFile, "asd");
+                var key = _masterkeyFileAccess.Unlock(_keyFile, "asd");
                 Assert.IsNotNull(key);
             }
 
@@ -162,7 +162,7 @@ namespace CryptomatorLib.Tests.Common
             [DisplayName("Test Unlock With Incorrect Password")]
             public void TestUnlockWithIncorrectPassword()
             {
-                Assert.ThrowsException<InvalidCredentialException>(() =>
+                Assert.ThrowsException<CryptomatorLib.Api.InvalidCredentialException>(() =>
                 {
                     _masterkeyFileAccess.Unlock(_keyFile, "qwe");
                 });
@@ -174,7 +174,7 @@ namespace CryptomatorLib.Tests.Common
             {
                 MasterkeyFileAccess masterkeyFileAccess = new MasterkeyFileAccess(new byte[1], SecureRandomMock.NULL_RANDOM);
 
-                Assert.ThrowsException<InvalidCredentialException>(() =>
+                Assert.ThrowsException<CryptomatorLib.Api.InvalidCredentialException>(() =>
                 {
                     masterkeyFileAccess.Unlock(_keyFile, "qwe");
                 });

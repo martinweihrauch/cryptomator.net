@@ -28,23 +28,23 @@ namespace CryptomatorLib.Tests.Common
             _headerCryptor = new Mock<FileHeaderCryptor>();
             _header = new Mock<FileHeader>();
 
-            _cryptor.Setup(c => c.GetFileContentCryptor()).Returns(_contentCryptor.Object);
-            _cryptor.Setup(c => c.GetFileHeaderCryptor()).Returns(_headerCryptor.Object);
+            _cryptor.Setup(c => c.FileContentCryptor()).Returns(_contentCryptor.Object);
+            _cryptor.Setup(c => c.FileHeaderCryptor()).Returns(_headerCryptor.Object);
 
-            _contentCryptor.Setup(c => c.GetCleartextChunkSize()).Returns(10);
+            _contentCryptor.Setup(c => c.CleartextChunkSize()).Returns(10);
 
             _headerCryptor.Setup(h => h.Create()).Returns(_header.Object);
-            _headerCryptor.Setup(h => h.EncryptHeader(_header.Object)).Returns(Encoding.UTF8.GetBytes("hhhhh"));
+            _headerCryptor.Setup(h => h.EncryptHeader(_header.Object)).Returns(new Memory<byte>(Encoding.UTF8.GetBytes("hhhhh")));
 
             _contentCryptor.Setup(c => c.EncryptChunk(
-                    It.IsAny<byte[]>(),
+                    It.IsAny<ReadOnlyMemory<byte>>(),
                     It.IsAny<long>(),
                     It.IsAny<FileHeader>()))
-                .Returns<byte[], long, FileHeader>((data, chunkNumber, header) =>
+                .Returns<ReadOnlyMemory<byte>, long, FileHeader>((data, chunkNumber, header) =>
                 {
                     // Simulate conversion to uppercase for testing purposes
-                    string content = Encoding.UTF8.GetString(data);
-                    return Encoding.UTF8.GetBytes(content.ToUpper());
+                    string content = Encoding.UTF8.GetString(data.ToArray());
+                    return new Memory<byte>(Encoding.UTF8.GetBytes(content.ToUpper()));
                 });
         }
 
@@ -58,16 +58,17 @@ namespace CryptomatorLib.Tests.Common
             {
                 byte[] resultBuffer = new byte[10];
 
-                // Create encrypting channel
-                using (var channel = new EncryptingReadableByteChannel(source, _cryptor.Object))
+                // Create encrypting channel with blockSize parameter
+                int blockSize = 1024; // Default block size
+                using (var channel = new EncryptingReadableByteChannel(source, _cryptor.Object, blockSize))
                 {
                     // Read data from the channel - should only get the header
                     int bytesRead1 = channel.Read(resultBuffer, 0, resultBuffer.Length);
                     Assert.AreEqual(5, bytesRead1);
 
-                    // Try to read more (should return -1 indicating EOF)
+                    // Try to read more (should return 0 indicating EOF)
                     int bytesRead2 = channel.Read(resultBuffer, bytesRead1, resultBuffer.Length - bytesRead1);
-                    Assert.AreEqual(-1, bytesRead2);
+                    Assert.AreEqual(0, bytesRead2);
 
                     // Verify the encrypted content (should just be the header)
                     byte[] encryptedData = new byte[bytesRead1];
@@ -80,7 +81,7 @@ namespace CryptomatorLib.Tests.Common
 
             // Verify encrypt chunk was never called (no content to encrypt)
             _contentCryptor.Verify(c => c.EncryptChunk(
-                It.IsAny<byte[]>(),
+                It.IsAny<ReadOnlyMemory<byte>>(),
                 It.IsAny<long>(),
                 It.IsAny<FileHeader>()),
                 Times.Never);
@@ -96,16 +97,17 @@ namespace CryptomatorLib.Tests.Common
             {
                 byte[] resultBuffer = new byte[50];
 
-                // Create encrypting channel
-                using (var channel = new EncryptingReadableByteChannel(source, _cryptor.Object))
+                // Create encrypting channel with blockSize parameter
+                int blockSize = 1024; // Default block size
+                using (var channel = new EncryptingReadableByteChannel(source, _cryptor.Object, blockSize))
                 {
                     // Read data from the channel
                     int bytesRead1 = channel.Read(resultBuffer, 0, resultBuffer.Length);
                     Assert.AreEqual(32, bytesRead1);
 
-                    // Try to read more (should return -1 indicating EOF)
+                    // Try to read more (should return 0 indicating EOF)
                     int bytesRead2 = channel.Read(resultBuffer, bytesRead1, resultBuffer.Length - bytesRead1);
-                    Assert.AreEqual(-1, bytesRead2);
+                    Assert.AreEqual(0, bytesRead2);
 
                     // Verify the encrypted content
                     byte[] encryptedData = new byte[bytesRead1];
@@ -118,13 +120,13 @@ namespace CryptomatorLib.Tests.Common
 
             // Verify the expected calls were made
             _contentCryptor.Verify(c => c.EncryptChunk(
-                It.IsAny<byte[]>(),
+                It.IsAny<ReadOnlyMemory<byte>>(),
                 It.Is<long>(chunkNumber => chunkNumber == 0),
                 It.IsAny<FileHeader>()),
                 Times.Once);
 
             _contentCryptor.Verify(c => c.EncryptChunk(
-                It.IsAny<byte[]>(),
+                It.IsAny<ReadOnlyMemory<byte>>(),
                 It.Is<long>(chunkNumber => chunkNumber == 1),
                 It.IsAny<FileHeader>()),
                 Times.Once);

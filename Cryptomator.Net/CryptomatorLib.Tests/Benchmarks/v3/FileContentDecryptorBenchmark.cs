@@ -19,7 +19,7 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
         private const int OneMB = 1024 * 1024;
 
         private RandomNumberGenerator _csprng;
-        private UVFMasterkey _masterkey;
+        private MockUVFMasterkey _masterkey;
         private CryptorImpl _cryptor;
         private byte[] _encryptedData1MB;
         private byte[] _encryptedData10MB;
@@ -38,7 +38,7 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
 
             int seedId = 12345; // Arbitrary seed ID
 
-            _masterkey = new UVFMasterkey(
+            _masterkey = new MockUVFMasterkey(
                 new Dictionary<int, byte[]> { { seedId, seed } },
                 kdfSalt,
                 seedId, // initialSeed
@@ -59,8 +59,8 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
 
             using (var outputStream = new MemoryStream())
             {
-                using (var outputChannel = new StreamAsSeekableByteChannel(outputStream))
-                using (var encryptingChannel = new EncryptingWritableByteChannel(outputChannel, _cryptor))
+                using (var outputChannel = new ChannelAdapter(new StreamAsSeekableByteChannel(outputStream)))
+                using (var encryptingChannel = new CryptomatorLib.Tests.Common.EncryptingWritableByteChannel(outputChannel, _cryptor))
                 {
                     encryptingChannel.Write(clearData, 0, clearData.Length);
                 }
@@ -84,8 +84,8 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
         private void DecryptData(byte[] encryptedData)
         {
             using (var inputStream = new MemoryStream(encryptedData))
-            using (var inputChannel = new StreamAsSeekableByteChannel(inputStream))
-            using (var decryptingChannel = new DecryptingReadableByteChannel(inputChannel, _cryptor))
+            using (var inputChannel = new ChannelAdapter(new StreamAsSeekableByteChannel(inputStream)))
+            using (var decryptingChannel = new CryptomatorLib.Tests.Common.DecryptingReadableByteChannel(inputChannel, _cryptor))
             using (var outputStream = new NullOutputStream())
             {
                 byte[] buffer = new byte[64 * 1024]; // 64KB buffer for reading
@@ -102,6 +102,55 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
         public void Cleanup()
         {
             _csprng.Dispose();
+        }
+        
+        /// <summary>
+        /// Adapter that wraps an ISeekableByteChannel
+        /// </summary>
+        private class ChannelAdapter : ISeekableByteChannel, IDisposable
+        {
+            private readonly CryptomatorLib.Common.ISeekableByteChannel _channel;
+            
+            public ChannelAdapter(CryptomatorLib.Common.ISeekableByteChannel channel)
+            {
+                _channel = channel ?? throw new ArgumentNullException(nameof(channel));
+            }
+            
+            public long CurrentPosition => _channel.CurrentPosition;
+            
+            public long CurrentSize => _channel.CurrentSize;
+            
+            public void Close() => _channel.Close();
+            
+            public void Dispose() 
+            {
+                if (_channel is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+                else
+                {
+                    _channel.Close();
+                }
+            }
+            
+            public long Position() => _channel.Position();
+            
+            public ISeekableByteChannel Position(long position)
+            {
+                _channel.Position(position);
+                return this;
+            }
+            
+            public int Read(byte[] dst, int offset, int count) 
+                => _channel.Read(dst, offset, count);
+            
+            public long Seek(long position) => _channel.Seek(position);
+            
+            public long Size() => _channel.Size();
+            
+            public int Write(byte[] src, int offset, int count)
+                => _channel.Write(src, offset, count);
         }
 
         /// <summary>
@@ -145,9 +194,9 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
         }
 
         /// <summary>
-        /// Adapter that converts a Stream to an ISeekableByteChannel
+        /// Adapter that converts a Stream to a seekable byte channel
         /// </summary>
-        private class StreamAsSeekableByteChannel : ISeekableByteChannel
+        private class StreamAsSeekableByteChannel : ISeekableByteChannel, IDisposable
         {
             private readonly Stream _stream;
             private bool _closed = false;

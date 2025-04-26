@@ -42,9 +42,33 @@ namespace CryptomatorLib.Common
         public int ScryptParallelism { get; set; }
         
         /// <summary>
-        /// Gets or sets the primary masterkey.
+        /// Gets or sets the scrypt salt.
+        /// </summary>
+        [JsonPropertyName("scryptSalt")]
+        public byte[]? ScryptSalt { get; set; }
+        
+        /// <summary>
+        /// Gets or sets the encrypted master key.
         /// </summary>
         [JsonPropertyName("primaryMasterKey")]
+        public byte[]? EncMasterKey { get; set; }
+        
+        /// <summary>
+        /// Gets or sets the MAC master key.
+        /// </summary>
+        [JsonPropertyName("hmacMasterKey")]
+        public byte[]? MacMasterKey { get; set; }
+        
+        /// <summary>
+        /// Gets or sets the version MAC.
+        /// </summary>
+        [JsonPropertyName("versionMac")]
+        public byte[]? VersionMac { get; set; }
+        
+        /// <summary>
+        /// Gets or sets the primary masterkey.
+        /// </summary>
+        [JsonPropertyName("primaryMasterKeyPlain")]
         public string? PrimaryMasterkey { get; set; }
         
         /// <summary>
@@ -126,21 +150,28 @@ namespace CryptomatorLib.Common
         /// <returns>The parsed masterkey file</returns>
         public static MasterkeyFile FromJson(byte[] json)
         {
-            if (json == null)
+            if (json == null || json.Length == 0)
             {
-                throw new ArgumentNullException(nameof(json));
+                throw new ArgumentException("JSON cannot be null or empty", nameof(json));
             }
             
-            var options = new JsonSerializerOptions
+            try
             {
-                PropertyNameCaseInsensitive = true,
-                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-            };
-            
-            var masterkeyFile = JsonSerializer.Deserialize<MasterkeyFile>(json, options) 
-                                ?? throw new JsonException("Failed to parse masterkey file");
-            masterkeyFile._rawJsonRepresentation = json;
-            return masterkeyFile;
+                var masterkeyFile = JsonSerializer.Deserialize<MasterkeyFile>(json);
+                if (masterkeyFile == null)
+                {
+                    throw new JsonException("Failed to deserialize masterkey file");
+                }
+                
+                masterkeyFile._rawJsonRepresentation = new byte[json.Length];
+                Buffer.BlockCopy(json, 0, masterkeyFile._rawJsonRepresentation, 0, json.Length);
+                
+                return masterkeyFile;
+            }
+            catch (JsonException ex)
+            {
+                throw new JsonException("Failed to parse masterkey file", ex);
+            }
         }
 
         /// <summary>
@@ -159,24 +190,22 @@ namespace CryptomatorLib.Common
         }
 
         /// <summary>
-        /// Converts this masterkey file to its JSON representation.
+        /// Serializes this masterkey file to JSON.
         /// </summary>
-        /// <returns>The JSON representation</returns>
+        /// <returns>The JSON representation of this masterkey file</returns>
         public byte[] ToJson()
         {
-            if (_rawJsonRepresentation != null)
+            try
             {
-                return _rawJsonRepresentation;
+                return JsonSerializer.SerializeToUtf8Bytes(this, new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
             }
-            
-            var options = new JsonSerializerOptions
+            catch (JsonException ex)
             {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-                WriteIndented = true
-            };
-            
-            return _rawJsonRepresentation = JsonSerializer.SerializeToUtf8Bytes(this, options);
+                throw new JsonException("Failed to serialize masterkey file", ex);
+            }
         }
 
         /// <summary>

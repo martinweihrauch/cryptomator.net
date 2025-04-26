@@ -22,17 +22,15 @@ namespace CryptomatorLib.Tests.Common
         public void TestGetSha256()
         {
             // Get a MessageDigest from the supplier
-            using (var lease1 = MessageDigestSupplier.SHA256.Instance())
+            using (var digestLease = MessageDigestSupplier.SHA256.Get())
             {
-                Assert.IsNotNull(lease1);
-                Assert.IsNotNull(lease1.Get());
+                Assert.IsNotNull(digestLease.Get());
             }
 
             // Get another MessageDigest from the supplier (should be pooled and reused)
-            using (var lease2 = MessageDigestSupplier.SHA256.Instance())
+            using (var digestLease = MessageDigestSupplier.SHA256.Get())
             {
-                Assert.IsNotNull(lease2);
-                Assert.IsNotNull(lease2.Get());
+                Assert.IsNotNull(digestLease.Get());
             }
         }
 
@@ -43,23 +41,13 @@ namespace CryptomatorLib.Tests.Common
             // Create test data
             byte[] data = new byte[] { 1, 2, 3, 4, 5 };
 
-            // Use the message digest
-            byte[] hash1;
-            using (var lease = MessageDigestSupplier.SHA256.Instance())
-            {
-                var digest = lease.Get();
-                digest.TransformFinalBlock(data, 0, data.Length);
-                hash1 = digest.Hash;
-            }
+            // Use the message digest - use Hash method directly
+            byte[] hash1 = MessageDigestSupplier.SHA256.Hash(data);
+            Assert.IsNotNull(hash1);
 
             // Use another message digest (should be reset and reused)
-            byte[] hash2;
-            using (var lease = MessageDigestSupplier.SHA256.Instance())
-            {
-                var digest = lease.Get();
-                digest.TransformFinalBlock(data, 0, data.Length);
-                hash2 = digest.Hash;
-            }
+            byte[] hash2 = MessageDigestSupplier.SHA256.Hash(data);
+            Assert.IsNotNull(hash2);
 
             // Both digests should produce the same hash for the same data
             CollectionAssert.AreEqual(hash1, hash2);

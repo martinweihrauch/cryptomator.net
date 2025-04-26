@@ -1,4 +1,8 @@
 using System;
+using System.Reflection;
+using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Running;
+using CryptomatorLib.Tests.Benchmarks.v3;
 
 namespace CryptomatorLib.Tests.Benchmarks
 {
@@ -10,14 +14,8 @@ namespace CryptomatorLib.Tests.Benchmarks
             Console.WriteLine("=====================");
             Console.WriteLine();
 
-            if (args.Length == 0)
-            {
-                Console.WriteLine("Running all benchmarks...");
-                BenchmarkRunner.RunAllBenchmarks();
-                return;
-            }
-
-            BenchmarkRunner.Main(args);
+            // With BenchmarkDotNet 0.14.0, we need to use this syntax
+            BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
         }
     }
 }

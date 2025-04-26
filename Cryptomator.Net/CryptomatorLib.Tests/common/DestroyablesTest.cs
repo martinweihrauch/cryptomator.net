@@ -19,7 +19,8 @@ namespace CryptomatorLib.Tests.Common
             // Call DestroySilently - should not throw
             try
             {
-                Destroyables.DestroySilently(destroyable.Object);
+                // Use explicit array to avoid ambiguity
+                Destroyables.DestroySilently(new IDestroyable[] { destroyable.Object });
             }
             catch (Exception)
             {
@@ -37,7 +38,8 @@ namespace CryptomatorLib.Tests.Common
             // Call DestroySilently with null - should not throw
             try
             {
-                Destroyables.DestroySilently(null);
+                // Use null in array context to avoid ambiguity
+                Destroyables.DestroySilently(new IDestroyable[] { null });
             }
             catch (Exception)
             {
@@ -59,7 +61,8 @@ namespace CryptomatorLib.Tests.Common
             // Call DestroySilently - should not propagate the exception
             try
             {
-                Destroyables.DestroySilently(destroyable.Object);
+                // Use explicit array to avoid ambiguity
+                Destroyables.DestroySilently(new IDestroyable[] { destroyable.Object });
             }
             catch (Exception)
             {
@@ -85,7 +88,9 @@ namespace CryptomatorLib.Tests.Common
             // Call DestroySilently with array - should not throw
             try
             {
-                Destroyables.DestroySilently(destroyable1.Object, destroyable2.Object, destroyable3.Object);
+                // Use explicit array parameter to avoid ambiguity
+                IDestroyable[] destroyables = { destroyable1.Object, destroyable2.Object, destroyable3.Object };
+                Destroyables.DestroySilently(destroyables);
             }
             catch (Exception)
             {

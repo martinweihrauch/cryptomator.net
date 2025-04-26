@@ -44,6 +44,20 @@ namespace CryptomatorLib.Common
         /// <param name="key">Encryption key</param>
         /// <param name="iv">IV/Nonce</param>
         /// <returns>A lease supplying a crypto transform for encryption</returns>
+        public ObjectPool<ICryptoTransform>.Lease<ICryptoTransform> EncryptionCipher(DestroyableSecretKey key, byte[] iv)
+        {
+            if (key == null)
+                throw new ArgumentNullException(nameof(key));
+            
+            return EncryptionCipher(key.GetRaw(), iv);
+        }
+
+        /// <summary>
+        /// Leases a reusable cipher object initialized for encryption.
+        /// </summary>
+        /// <param name="key">Encryption key</param>
+        /// <param name="iv">IV/Nonce</param>
+        /// <returns>A lease supplying a crypto transform for encryption</returns>
         public ObjectPool<ICryptoTransform>.Lease<ICryptoTransform> EncryptionCipher(byte[] key, byte[] iv)
         {
             if (key == null)
@@ -57,6 +71,20 @@ namespace CryptomatorLib.Common
             ICryptoTransform transform = CreateTransform(key, iv, true);
             
             return new ObjectPool<ICryptoTransform>.Lease<ICryptoTransform>(_encryptorPool, transform);
+        }
+
+        /// <summary>
+        /// Leases a reusable cipher object initialized for decryption.
+        /// </summary>
+        /// <param name="key">Decryption key</param>
+        /// <param name="iv">IV/Nonce</param>
+        /// <returns>A lease supplying a crypto transform for decryption</returns>
+        public ObjectPool<ICryptoTransform>.Lease<ICryptoTransform> DecryptionCipher(DestroyableSecretKey key, byte[] iv)
+        {
+            if (key == null)
+                throw new ArgumentNullException(nameof(key));
+            
+            return DecryptionCipher(key.GetRaw(), iv);
         }
 
         /// <summary>

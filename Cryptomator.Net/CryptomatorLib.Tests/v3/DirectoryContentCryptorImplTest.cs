@@ -97,7 +97,7 @@ namespace CryptomatorLib.Tests.V3
             [TestInitialize]
             public void Setup()
             {
-                dirUvf = new DirectoryMetadataImpl(masterkey.CurrentRevision, new byte[32]);
+                dirUvf = new DirectoryMetadataImpl(masterkey.GetCurrentRevision(), new byte[32]);
                 enc = dirCryptor.FileNameEncryptor(dirUvf);
                 dec = dirCryptor.FileNameDecryptor(dirUvf);
             }
@@ -148,7 +148,7 @@ namespace CryptomatorLib.Tests.V3
             [DisplayName("Decrypt file with incorrect seed")]
             public void TestDecryptMalformed3()
             {
-                DirectoryMetadataImpl differentRevision = new DirectoryMetadataImpl(masterkey.FirstRevision, new byte[32]);
+                DirectoryMetadataImpl differentRevision = new DirectoryMetadataImpl(masterkey.GetFirstRevision(), new byte[32]);
                 var differentRevisionDec = dirCryptor.FileNameDecryptor(differentRevision);
                 Assert.ThrowsException<AuthenticationFailedException>(() =>
                 {
@@ -160,7 +160,7 @@ namespace CryptomatorLib.Tests.V3
             [DisplayName("Decrypt file with incorrect dirId")]
             public void TestDecryptMalformed4()
             {
-                DirectoryMetadataImpl differentDirId = new DirectoryMetadataImpl(masterkey.FirstRevision, new byte[] { 0xDE, 0x0A, 0xD });
+                DirectoryMetadataImpl differentDirId = new DirectoryMetadataImpl(masterkey.GetFirstRevision(), new byte[] { 0xDE, 0x0A, 0xD });
                 var differentDirIdDec = dirCryptor.FileNameDecryptor(differentDirId);
                 Assert.ThrowsException<AuthenticationFailedException>(() =>
                 {

@@ -55,34 +55,6 @@ namespace CryptomatorLib.Tests.Benchmarks
             BenchmarkDotNet.Running.BenchmarkRunner.Run<DecryptionBenchmarks>(config);
         }
 
-        /// <summary>
-        /// Main method for running benchmarks from command line
-        /// </summary>
-        public static void Main(string[] args)
-        {
-            if (args.Length == 0)
-            {
-                RunAllBenchmarks();
-                return;
-            }
-
-            switch (args[0].ToLowerInvariant())
-            {
-                case "encryption":
-                case "encrypt":
-                    RunEncryptionBenchmarks();
-                    break;
-                case "decryption":
-                case "decrypt":
-                    RunDecryptionBenchmarks();
-                    break;
-                case "all":
-                    RunAllBenchmarks();
-                    break;
-                default:
-                    Console.WriteLine("Unknown benchmark type. Use 'encryption', 'decryption', or 'all'.");
-                    break;
-            }
-        }
+        // Main method removed to avoid multiple entry points conflict in test project
     }
 }

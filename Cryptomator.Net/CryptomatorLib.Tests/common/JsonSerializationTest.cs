@@ -51,9 +51,15 @@ namespace CryptomatorLib.Tests.Common
         public void TestReadObjectFromStream()
         {
             string json = "{\"stringValue\":\"foobar\",\"intValue\":42,\"boolValue\":true}";
-            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+            byte[] jsonBytes = Encoding.UTF8.GetBytes(json);
+            using var stream = new MemoryStream(jsonBytes);
 
-            var testObject = JsonSerialization.FromJson<TestObject>(stream);
+            // Read the stream content as a string first
+            stream.Position = 0;
+            using var reader = new StreamReader(stream);
+            string jsonFromStream = reader.ReadToEnd();
+
+            var testObject = JsonSerialization.FromJson<TestObject>(jsonFromStream);
 
             Assert.AreEqual("foobar", testObject.StringValue);
             Assert.AreEqual(42, testObject.IntValue);
@@ -71,8 +77,14 @@ namespace CryptomatorLib.Tests.Common
                 BoolValue = true
             };
 
+            // First convert to JSON string
+            string jsonString = JsonSerialization.ToJson(testObject);
+
+            // Then write to stream
             using var stream = new MemoryStream();
-            JsonSerialization.ToJson(testObject, stream);
+            using var writer = new StreamWriter(stream);
+            writer.Write(jsonString);
+            writer.Flush();
 
             // Reset stream position to beginning for reading
             stream.Seek(0, SeekOrigin.Begin);

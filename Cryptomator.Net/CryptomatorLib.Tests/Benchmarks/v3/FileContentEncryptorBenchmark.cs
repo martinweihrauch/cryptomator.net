@@ -16,7 +16,7 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
     public class FileContentEncryptorBenchmark
     {
         private RandomNumberGenerator _csprng;
-        private UVFMasterkey _masterkey;
+        private MockUVFMasterkey _masterkey;
         private CryptorImpl _cryptor;
 
         [GlobalSetup]
@@ -33,7 +33,7 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
 
             int seedId = 12345; // Arbitrary seed ID
 
-            _masterkey = new UVFMasterkey(
+            _masterkey = new MockUVFMasterkey(
                 new System.Collections.Generic.Dictionary<int, byte[]> { { seedId, seed } },
                 kdfSalt,
                 seedId, // initialSeed
@@ -68,8 +68,11 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
             byte[] buffer = new byte[1024 * 1024]; // Use 1MB chunks for writing
             new Random(42).NextBytes(buffer); // Fill with pseudo-random data
 
-            using (var outputChannel = new NullSeekableByteChannel())
-            using (var encryptingChannel = new EncryptingWritableByteChannel(outputChannel, _cryptor))
+            // Create a dummy stream and wrap it in a test channel
+            using var nullStream = new NullStream();
+            using var channelAdapter = new NullTestChannel();
+            
+            using (var encryptingChannel = new CryptomatorLib.Tests.Common.EncryptingWritableByteChannel(channelAdapter, _cryptor))
             {
                 int remaining = sizeBytes;
                 while (remaining > 0)
@@ -86,92 +89,102 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
         {
             _csprng.Dispose();
         }
-
+        
         /// <summary>
-        /// A seekable byte channel that discards all data written to it.
+        /// A null stream that discards all data
         /// </summary>
-        private class NullSeekableByteChannel : ISeekableByteChannel
+        private class NullStream : Stream
+        {
+            private long _position = 0;
+            
+            public override bool CanRead => false;
+            public override bool CanSeek => true;
+            public override bool CanWrite => true;
+            public override long Length => _position;
+
+            public override long Position
+            {
+                get => _position;
+                set => _position = value;
+            }
+
+            public override void Flush() { }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                throw new NotImplementedException();
+            }
+
+            public override long Seek(long offset, SeekOrigin origin)
+            {
+                switch (origin)
+                {
+                    case SeekOrigin.Begin:
+                        _position = offset;
+                        break;
+                    case SeekOrigin.Current:
+                        _position += offset;
+                        break;
+                    case SeekOrigin.End:
+                        _position = Length + offset;
+                        break;
+                }
+                return _position;
+            }
+
+            public override void SetLength(long value)
+            {
+                _position = value;
+            }
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                _position += count;
+            }
+        }
+        
+        /// <summary>
+        /// A test channel that implements ISeekableByteChannel and discards all data
+        /// </summary>
+        private class NullTestChannel : ISeekableByteChannel, IDisposable
         {
             private bool _open = true;
             private long _position = 0;
-
-            public bool IsOpen => _open;
-
-            public long CurrentPosition
-            {
-                get
-                {
-                    if (!_open) throw new ObjectDisposedException(nameof(NullSeekableByteChannel));
-                    return _position;
-                }
-            }
-
-            public long CurrentSize
-            {
-                get
-                {
-                    if (!_open) throw new ObjectDisposedException(nameof(NullSeekableByteChannel));
-                    return _position;
-                }
-            }
-
-            public void Close()
-            {
-                _open = false;
-            }
-
+            
+            public long CurrentPosition => _position;
+            
+            public long CurrentSize => _position;
+            
+            public void Close() => _open = false;
+            
+            public void Dispose() => Close();
+            
             public int Read(byte[] dst, int offset, int count)
             {
-                throw new NotImplementedException("Read operation not supported in NullSeekableByteChannel");
+                throw new NotImplementedException();
             }
-
+            
             public int Write(byte[] src, int offset, int count)
             {
-                if (!_open) throw new ObjectDisposedException(nameof(NullSeekableByteChannel));
                 _position += count;
                 return count;
             }
-
+            
             public long Seek(long position)
             {
-                if (!_open) throw new ObjectDisposedException(nameof(NullSeekableByteChannel));
                 _position = position;
                 return _position;
             }
-
-            public long Position()
-            {
-                if (!_open) throw new ObjectDisposedException(nameof(NullSeekableByteChannel));
-                return _position;
-            }
-
+            
+            public long Position() => _position;
+            
             public ISeekableByteChannel Position(long newPosition)
             {
-                if (!_open) throw new ObjectDisposedException(nameof(NullSeekableByteChannel));
                 _position = newPosition;
                 return this;
             }
-
-            public long Size()
-            {
-                if (!_open) throw new ObjectDisposedException(nameof(NullSeekableByteChannel));
-                return _position;
-            }
-
-            public ISeekableByteChannel Truncate(long size)
-            {
-                if (!_open) throw new ObjectDisposedException(nameof(NullSeekableByteChannel));
-                if (size < _position)
-                {
-                    _position = size;
-                }
-                return this;
-            }
-
-            public void Dispose()
-            {
-                Close();
-            }
+            
+            public long Size() => _position;
         }
     }
 }
