@@ -115,14 +115,26 @@ namespace CryptomatorLib.Tests.V3
             string origName = "test-file.txt";
             string encrypted = _filenameCryptor.EncryptFilename(origName);
 
-            // Manipulate the encrypted filename by changing a character
-            char[] chars = encrypted.ToCharArray();
-            if (chars.Length > 0)
-            {
-                chars[chars.Length - 1] = chars[chars.Length - 1] == 'A' ? 'B' : 'A';
-            }
-            string tamperedEncrypted = new string(chars);
+            // Parse the encrypted filename to manipulate the payload part
+            int separatorIndex = encrypted.IndexOf('_');
+            string seedId = encrypted.Substring(0, separatorIndex);
+            string payload = encrypted.Substring(separatorIndex + 1);
 
+            // Ensure the payload is at least 3 characters long
+            if (payload.Length < 3)
+            {
+                Assert.Inconclusive("Generated payload is too short for manipulation");
+            }
+
+            // Manipulate a character in the middle of the payload (not the first char)
+            char[] chars = payload.ToCharArray();
+            int indexToManipulate = Math.Min(chars.Length - 1, Math.Max(1, chars.Length / 2));
+            chars[indexToManipulate] = chars[indexToManipulate] == 'A' ? 'B' : 'A';
+            
+            string tamperedPayload = new string(chars);
+            string tamperedEncrypted = seedId + "_" + tamperedPayload;
+
+            // This should throw an authentication exception
             Assert.ThrowsException<AuthenticationFailedException>(() =>
                 _filenameCryptor.DecryptFilename(tamperedEncrypted));
         }

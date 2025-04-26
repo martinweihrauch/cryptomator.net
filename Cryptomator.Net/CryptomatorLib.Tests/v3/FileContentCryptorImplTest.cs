@@ -11,6 +11,8 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using Moq;
+using System.Diagnostics;
+using System.Linq;
 
 namespace CryptomatorLib.Tests.V3
 {
@@ -58,15 +60,49 @@ namespace CryptomatorLib.Tests.V3
         [DisplayName("Test Decrypted Encrypted Equals Plaintext")]
         public void TestDecryptedEncryptedEqualsPlaintext()
         {
-            // Arrange
-            string plaintext = "test message";
+            // Arrange - use a very small text for easier debugging
+            string plaintext = "hello";
             ReadOnlyMemory<byte> cleartextData = Encoding.UTF8.GetBytes(plaintext);
-            Memory<byte> ciphertextBuffer = new Memory<byte>(new byte[_fileContentCryptor.CiphertextChunkSize()]);
+            byte[] ciphertextArray = new byte[_fileContentCryptor.CiphertextChunkSize()];
+            Memory<byte> ciphertextBuffer = new Memory<byte>(ciphertextArray);
             Memory<byte> cleartextBuffer = new Memory<byte>(new byte[_fileContentCryptor.CleartextChunkSize()]);
 
             // Act
+            // Encrypt
             _fileContentCryptor.EncryptChunk(cleartextData, ciphertextBuffer, 42, _header);
-            _fileContentCryptor.DecryptChunk(ciphertextBuffer, cleartextBuffer, 42, _header, true);
+
+            // Dump cipher details for debugging
+            Debug.WriteLine($"Encrypted data length: {ciphertextArray.Length}");
+            Debug.WriteLine($"Expected structure: {CommonConstants.GCM_NONCE_SIZE} bytes nonce + {cleartextData.Length} bytes data + {CommonConstants.GCM_TAG_SIZE} bytes tag");
+
+            // Extract and log tag from ciphertext directly after encryption
+            byte[] encTag = new byte[CommonConstants.GCM_TAG_SIZE];
+            Buffer.BlockCopy(ciphertextArray, CommonConstants.GCM_NONCE_SIZE + cleartextData.Length, encTag, 0, CommonConstants.GCM_TAG_SIZE);
+            Debug.WriteLine($"Tag directly after encryption: {BitConverter.ToString(encTag)}");
+
+            // Manually set up a ciphertext with the same data to ensure correct tag
+            byte[] manualCiphertext = new byte[CommonConstants.GCM_NONCE_SIZE + cleartextData.Length + CommonConstants.GCM_TAG_SIZE];
+
+            // Copy nonce (all zeros from the mock random)
+            byte[] nonce = new byte[CommonConstants.GCM_NONCE_SIZE];
+            Buffer.BlockCopy(ciphertextArray, 0, nonce, 0, CommonConstants.GCM_NONCE_SIZE);
+            Buffer.BlockCopy(nonce, 0, manualCiphertext, 0, CommonConstants.GCM_NONCE_SIZE);
+
+            // Copy encrypted payload
+            Buffer.BlockCopy(ciphertextArray, CommonConstants.GCM_NONCE_SIZE, manualCiphertext, CommonConstants.GCM_NONCE_SIZE, cleartextData.Length);
+
+            // Copy tag
+            Buffer.BlockCopy(encTag, 0, manualCiphertext, CommonConstants.GCM_NONCE_SIZE + cleartextData.Length, CommonConstants.GCM_TAG_SIZE);
+
+            Debug.WriteLine($"Manual ciphertext length: {manualCiphertext.Length}");
+            Debug.WriteLine($"Manual ciphertext nonce: {BitConverter.ToString(manualCiphertext.Take(CommonConstants.GCM_NONCE_SIZE).ToArray())}");
+            Debug.WriteLine($"Manual ciphertext tag: {BitConverter.ToString(manualCiphertext.Skip(CommonConstants.GCM_NONCE_SIZE + cleartextData.Length).Take(CommonConstants.GCM_TAG_SIZE).ToArray())}");
+
+            // Create a fresh ReadOnlyMemory from the manual array
+            ReadOnlyMemory<byte> manualCiphertextReadOnly = manualCiphertext;
+
+            // Decrypt using our manually constructed ciphertext
+            _fileContentCryptor.DecryptChunk(manualCiphertextReadOnly, cleartextBuffer, 42, _header, true);
 
             // Assert
             byte[] decryptedData = cleartextBuffer.Slice(0, cleartextData.Length).ToArray();

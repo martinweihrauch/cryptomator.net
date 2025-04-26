@@ -107,14 +107,21 @@ namespace CryptomatorLib.V3
         /// </summary>
         /// <param name="header">The file header to cast</param>
         /// <returns>The cast file header</returns>
-        /// <exception cref="ArgumentException">If the header is not a FileHeaderImpl</exception>
+        /// <exception cref="ArgumentNullException">If the header is null</exception>
+        /// <exception cref="InvalidCastException">If the header is not a FileHeaderImpl</exception>
         internal static FileHeaderImpl Cast(FileHeader header)
         {
+            if (header == null)
+            {
+                throw new ArgumentNullException(nameof(header));
+            }
+            
             if (header is FileHeaderImpl headerImpl)
             {
                 return headerImpl;
             }
-            throw new ArgumentException("Header must be a FileHeaderImpl", nameof(header));
+            
+            throw new InvalidCastException($"Cannot cast {header.GetType().Name} to FileHeaderImpl");
         }
 
         /// <summary>

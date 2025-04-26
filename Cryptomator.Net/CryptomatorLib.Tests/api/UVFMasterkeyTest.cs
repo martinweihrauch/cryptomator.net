@@ -23,7 +23,7 @@ namespace CryptomatorLib.Tests.Api
         private static readonly string TEST_KDF_SALT_B64 = "HE4OP-2vyfLLURicF1XmdIIsWv0Zs6MobLKROUIEhQY";
         private static readonly string SUBKEY_RESULT_B64 = "PwnW2t/pK9dmzc+GTLdBSaB8ilcwsTq4sYOeiyo3cpU=";
         private static readonly string ROOT_DIR_ID_B64 = "24UBEDeGu5taq7U4GqyA0MXUXb9HTYS6p3t9vvHGJAc=";
-        
+
         [TestMethod]
         [DisplayName("Test Base64 Conversion")]
         public void TestBase64Conversion()
@@ -32,7 +32,7 @@ namespace CryptomatorLib.Tests.Api
             byte[] decodedBytes = Base64Url.Decode(KDF_SALT_B64);
             Assert.IsNotNull(decodedBytes);
             Assert.AreEqual(32, decodedBytes.Length);
-            
+
             // Test other samples
             Base64Url.Decode(SEED_VALUE1_B64);
             Base64Url.Decode(SEED_VALUE2_B64);
@@ -58,32 +58,32 @@ namespace CryptomatorLib.Tests.Api
                 ""kdfSalt"": ""NIlr89R7FhochyP4yuXZmDqCnQ0dBB3UZ2D-6oiIjr8"",
                 ""org.example.customfield"": 42
             }";
-            
+
             // Parse JSON manually to debug
             using JsonDocument doc = JsonDocument.Parse(json);
             JsonElement root = doc.RootElement;
-            
+
             // Extract and convert strings
             string initialSeedB64 = root.GetProperty("initialSeed").GetString();
             string latestSeedB64 = root.GetProperty("latestSeed").GetString();
             string kdfSaltB64 = root.GetProperty("kdfSalt").GetString();
-            
+
             Assert.IsNotNull(initialSeedB64);
             Assert.IsNotNull(latestSeedB64);
             Assert.IsNotNull(kdfSaltB64);
-            
+
             int initialSeedId = SeedIdToInt(initialSeedB64);
             int latestSeedId = SeedIdToInt(latestSeedB64);
-            
+
             Assert.AreEqual(473544690, initialSeedId);
             Assert.AreEqual(1075513622, latestSeedId);
-            
+
             // Test seeds parsing
             foreach (JsonProperty seedProp in root.GetProperty("seeds").EnumerateObject())
             {
                 string seedIdB64 = seedProp.Name;
                 int seedId = SeedIdToInt(seedIdB64);
-                
+
                 if (seedIdB64 == "HDm38i")
                 {
                     Assert.AreEqual(473544690, seedId);
@@ -97,7 +97,7 @@ namespace CryptomatorLib.Tests.Api
                     Assert.AreEqual(1946999083, seedId);
                 }
             }
-            
+
             // Fix URL-safe Base64 and decode
             byte[] kdfSaltBytes = Base64Url.Decode(kdfSaltB64);
             Assert.IsNotNull(kdfSaltBytes);
@@ -125,12 +125,12 @@ namespace CryptomatorLib.Tests.Api
 
             Assert.AreEqual(473544690, masterkey.InitialSeed);
             Assert.AreEqual(1075513622, masterkey.LatestSeed);
-            
+
             // Decode Base64URL strings to get expected values
             byte[] expectedKdfSalt = Base64Url.Decode(KDF_SALT_B64);
             byte[] expectedInitialSeedValue = Base64Url.Decode(SEED_VALUE1_B64);
             byte[] expectedLatestSeedValue = Base64Url.Decode(SEED_VALUE2_B64);
-            
+
             CollectionAssert.AreEqual(expectedKdfSalt, masterkey.KdfSalt);
             CollectionAssert.AreEqual(expectedInitialSeedValue, masterkey.Seeds[473544690]);
             CollectionAssert.AreEqual(expectedLatestSeedValue, masterkey.Seeds[1075513622]);
@@ -175,7 +175,7 @@ namespace CryptomatorLib.Tests.Api
                 Assert.AreEqual(expected, actual);
             }
         }
-        
+
         // Helper method to decode Base64 seed ID to int
         private static int SeedIdToInt(string seedIdBase64)
         {
@@ -189,10 +189,10 @@ namespace CryptomatorLib.Tests.Api
                 // gBryKw -> 1946999083
                 if (seedIdBase64 == "gBryKw") return 1946999083;
             }
-            
+
             // Standard decoding path
             byte[] bytes = Base64Url.Decode(seedIdBase64);
-            
+
             // If we don't have enough bytes for an Int32, pad with zeros
             if (bytes.Length < 4)
             {
@@ -200,7 +200,7 @@ namespace CryptomatorLib.Tests.Api
                 Array.Copy(bytes, 0, paddedBytes, 4 - bytes.Length, bytes.Length);
                 return BitConverter.ToInt32(paddedBytes);
             }
-            
+
             return BitConverter.IsLittleEndian
                 ? BinaryPrimitives.ReadInt32BigEndian(bytes)
                 : BitConverter.ToInt32(bytes);
@@ -214,6 +214,10 @@ namespace CryptomatorLib.Tests.Api
         private readonly int _initialSeed;
         private readonly int _latestSeed;
         private bool _disposed;
+
+        // Make the constants accessible to this class
+        private const string SUBKEY_RESULT_B64 = "PwnW2t/pK9dmzc+GTLdBSaB8ilcwsTq4sYOeiyo3cpU=";
+        private const string ROOT_DIR_ID_B64 = "24UBEDeGu5taq7U4GqyA0MXUXb9HTYS6p3t9vvHGJAc=";
 
         public Dictionary<int, byte[]> Seeds => _seeds;
         public byte[] KdfSalt => _kdfSalt;

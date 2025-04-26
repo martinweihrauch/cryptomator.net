@@ -65,30 +65,31 @@ namespace CryptomatorLib.V3
         {
             if (ciphertext.Length != 128)
             {
-                throw new ArgumentException($"Invalid dir.uvf length: {ciphertext.Length}", nameof(ciphertext));
+                throw new ArgumentException("Expected ciphertext of 128 bytes length but was: " + ciphertext.Length);
             }
 
-            int headerSize = _cryptor.FileHeaderCryptor().HeaderSize();
-            Span<byte> headerBytes = ciphertext.AsSpan(0, headerSize);
-            Span<byte> contentBytes = ciphertext.AsSpan(headerSize);
+            // Extract the header (first 80 bytes)
+            byte[] headerBytes = new byte[FileHeaderImpl.SIZE];
+            Buffer.BlockCopy(ciphertext, 0, headerBytes, 0, headerBytes.Length);
 
-            // Convert to ReadOnlyMemory for DecryptHeader
-            var headerMemory = new ReadOnlyMemory<byte>(headerBytes.ToArray());
+            // Decrypt the file header
+            var headerCryptor = _cryptor.FileHeaderCryptor();
+            FileHeader header = headerCryptor.DecryptHeader(headerBytes);
+            var fileHeaderImpl = FileHeaderImpl.Cast(header);
 
-            FileHeader header = _cryptor.FileHeaderCryptor().DecryptHeader(headerMemory);
-            FileHeaderImpl headerImpl = FileHeaderImpl.Cast(header);
+            // Extract the content (remaining 48 bytes)
+            int contentLength = ciphertext.Length - headerBytes.Length;
+            ReadOnlyMemory<byte> contentBytes = new ReadOnlyMemory<byte>(ciphertext, headerBytes.Length, contentLength);
 
-            var plaintext = _cryptor.FileContentCryptor().DecryptChunk(contentBytes.ToArray(), 0, header, true);
+            // Decrypt the content using the file content cryptor
+            Memory<byte> plaintext = _cryptor.FileContentCryptor().DecryptChunk(contentBytes, 0, header, true);
 
-            if (plaintext.Length != 32)
-            {
-                throw new InvalidOperationException("Expected 32 bytes of plaintext but got " + plaintext.Length);
-            }
-
+            // Get the directory ID from the plaintext
             byte[] dirId = new byte[32];
-            Buffer.BlockCopy(plaintext.ToArray(), 0, dirId, 0, 32);
+            plaintext.Slice(0, 32).CopyTo(dirId);
 
-            return new DirectoryMetadataImpl(headerImpl.GetSeedId(), dirId);
+            // Create and return the directory metadata
+            return new DirectoryMetadataImpl(fileHeaderImpl.GetSeedId(), dirId);
         }
 
         /// <summary>
@@ -101,20 +102,75 @@ namespace CryptomatorLib.V3
             DirectoryMetadataImpl metadataImpl = DirectoryMetadataImpl.Cast(directoryMetadata);
             byte[] cleartextBytes = metadataImpl.DirId();
 
-            FileHeader header = _cryptor.FileHeaderCryptor(metadataImpl.SeedId()).Create();
+            // Create the header
+            var headerCryptor = _cryptor.FileHeaderCryptor(metadataImpl.SeedId());
+            FileHeader header = headerCryptor.Create();
+            Memory<byte> headerBytes = headerCryptor.EncryptHeader(header);
 
-            // Convert to byte[] from Memory<byte>
-            Memory<byte> headerBytesMemory = _cryptor.FileHeaderCryptor().EncryptHeader(header);
-            byte[] headerBytes = headerBytesMemory.ToArray();
+            // Get the file content cryptor and prepare for encryption
+            var contentCryptor = _cryptor.FileContentCryptor();
+            var fileHeaderImpl = FileHeaderImpl.Cast(header);
 
-            Memory<byte> contentBytesMemory = _cryptor.FileContentCryptor().EncryptChunk(cleartextBytes, 0, header);
-            byte[] contentBytes = contentBytesMemory.ToArray();
+            // Generate nonce (IV)
+            byte[] nonce = new byte[Constants.GCM_NONCE_SIZE];
+            _random.GetBytes(nonce);
 
-            byte[] result = new byte[headerBytes.Length + contentBytes.Length];
-            Buffer.BlockCopy(headerBytes, 0, result, 0, headerBytes.Length);
-            Buffer.BlockCopy(contentBytes, 0, result, headerBytes.Length, contentBytes.Length);
+            // Prepare AAD (Additional Authenticated Data): chunk number (0) + header nonce
+            byte[] headerNonce = fileHeaderImpl.GetNonce();
+            byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(0); // Always chunk 0 for directory metadata
+            byte[] aad = ByteBuffers.Concat(chunkNumberBytes, headerNonce);
 
-            return result;
+            try
+            {
+                // Allocate space for the encrypted content (32 bytes dirId + 16 bytes tag = 48 bytes)
+                byte[] contentBytes = new byte[cleartextBytes.Length + Constants.GCM_TAG_SIZE];
+
+                // Get the content key from the header
+                using DestroyableSecretKey contentKey = fileHeaderImpl.GetContentKey().Copy();
+
+                // Encrypt using AES-GCM
+                using var aesGcm = new AesGcm(contentKey.GetRaw());
+
+                // Copy nonce to the beginning of content bytes (but will be separated in final output)
+                byte[] tag = new byte[Constants.GCM_TAG_SIZE];
+
+                // Encrypt the dirId
+                aesGcm.Encrypt(
+                    nonce,
+                    cleartextBytes,
+                    contentBytes.AsSpan(0, cleartextBytes.Length),
+                    tag,
+                    aad);
+
+                // Copy tag to the end
+                Buffer.BlockCopy(tag, 0, contentBytes, cleartextBytes.Length, Constants.GCM_TAG_SIZE);
+
+                // Combine nonce, header, and encrypted content
+                byte[] result = new byte[headerBytes.Length + nonce.Length + contentBytes.Length];
+
+                // Copy header bytes (80 bytes)
+                headerBytes.CopyTo(new Memory<byte>(result, 0, headerBytes.Length));
+
+                // Copy nonce (12 bytes) after header
+                Buffer.BlockCopy(nonce, 0, result, headerBytes.Length, nonce.Length);
+
+                // Copy content (32+16=48 bytes) after nonce
+                Buffer.BlockCopy(contentBytes, 0, result, headerBytes.Length + nonce.Length, contentBytes.Length);
+
+                // The result should be exactly 128 bytes (80 + 12 + 32 + 16 = 140 bytes)
+                if (result.Length != 128)
+                {
+                    throw new InvalidOperationException($"Expected encrypted directory metadata to be 128 bytes, but got {result.Length} bytes.");
+                }
+
+                return result;
+            }
+            finally
+            {
+                // Clean up sensitive data
+                CryptomatorLib.Common.CryptographicOperations.ZeroMemory(nonce);
+                CryptomatorLib.Common.CryptographicOperations.ZeroMemory(aad);
+            }
         }
 
         // DIR PATH

@@ -117,7 +117,7 @@ namespace CryptomatorLib.V3
             // Generate nonce (IV)
             byte[] nonce = new byte[Constants.GCM_NONCE_SIZE];
             _random.GetBytes(nonce);
-            
+
             // Debug: Log nonce values
             Debug.WriteLine($"Encrypting chunk {chunkNumber} with nonce: {BitConverter.ToString(nonce)}");
 
@@ -178,86 +178,76 @@ namespace CryptomatorLib.V3
         /// <exception cref="AuthenticationFailedException">If authentication fails</exception>
         public Memory<byte> DecryptChunk(ReadOnlyMemory<byte> ciphertextChunk, long chunkNumber, FileHeader header, bool authenticate)
         {
-            // We always authenticate with GCM
-            if (!authenticate)
-            {
-                throw new ArgumentException("Authentication cannot be disabled for GCM", nameof(authenticate));
-            }
+            ValidateDecryptionParameters(ciphertextChunk, Memory<byte>.Empty, header, authenticate);
 
-            // Debug: Log chunk size
-            Debug.WriteLine($"Decrypting chunk {chunkNumber} with size: {ciphertextChunk.Length}");
-
-            // Allocate buffer for plaintext - size is payload size to handle any payload up to the maximum
+            // Allocate buffer for plaintext - max size is payload size
             var cleartextChunk = new Memory<byte>(new byte[Constants.PAYLOAD_SIZE]);
 
             // Decrypt
             DecryptChunk(ciphertextChunk, cleartextChunk, chunkNumber, header, authenticate);
 
-            // Trim to actual size
-            int payloadSize = ciphertextChunk.Length - Constants.GCM_NONCE_SIZE - Constants.GCM_TAG_SIZE;
-            Debug.WriteLine($"Decrypted chunk {chunkNumber} payload size: {payloadSize}");
-            
-            return cleartextChunk.Slice(0, payloadSize);
+            return cleartextChunk;
         }
 
         /// <summary>
         /// Decrypts a chunk of data.
         /// </summary>
-        /// <param name="ciphertextChunk">The encrypted chunk</param>
+        /// <param name="ciphertextChunk">The encrypted chunk data</param>
         /// <param name="cleartextChunk">The buffer to store the decrypted chunk</param>
-        /// <param name="chunkNumber">The number of the chunk in the stream</param>
+        /// <param name="chunkNumber">The chunk number</param>
         /// <param name="header">The file header</param>
-        /// <param name="authenticate">Whether to authenticate the chunk (must be true for GCM)</param>
-        /// <exception cref="AuthenticationFailedException">If authentication fails</exception>
+        /// <param name="authenticate">Whether to authenticate the data</param>
+        /// <exception cref="ArgumentException">If the ciphertext chunk is too small</exception>
+        /// <exception cref="AuthenticationFailedException">If the data fails authentication</exception>
         public void DecryptChunk(ReadOnlyMemory<byte> ciphertextChunk, Memory<byte> cleartextChunk, long chunkNumber, FileHeader header, bool authenticate)
         {
             ValidateDecryptionParameters(ciphertextChunk, cleartextChunk, header, authenticate);
 
             FileHeaderImpl headerImpl = FileHeaderImpl.Cast(header);
 
-            // Extract nonce from ciphertext
-            byte[] nonce = ciphertextChunk.Slice(0, Constants.GCM_NONCE_SIZE).ToArray();
-            
-            // Debug: Log nonce values
-            Debug.WriteLine($"Decrypting chunk {chunkNumber} with nonce: {BitConverter.ToString(nonce)}");
+            // Extract nonce from beginning of ciphertext
+            byte[] nonce = new byte[Constants.GCM_NONCE_SIZE];
+            ciphertextChunk.Slice(0, Constants.GCM_NONCE_SIZE).CopyTo(nonce);
 
-            // Calculate payload size (ciphertext minus nonce and tag)
+            // Calculate payload size (total - nonce - tag)
             int payloadSize = ciphertextChunk.Length - Constants.GCM_NONCE_SIZE - Constants.GCM_TAG_SIZE;
 
-            // Extract encrypted payload and tag
-            ReadOnlyMemory<byte> payload = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE, payloadSize);
-            ReadOnlyMemory<byte> tag = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE + payloadSize, Constants.GCM_TAG_SIZE);
-            
-            // Debug log tag
-            byte[] tagBytes = tag.ToArray();
-            Debug.WriteLine($"Decryption tag for chunk {chunkNumber}: {BitConverter.ToString(tagBytes)}");
+            // Extract tag from the end of ciphertext
+            byte[] tag = new byte[Constants.GCM_TAG_SIZE];
+            ciphertextChunk.Slice(ciphertextChunk.Length - Constants.GCM_TAG_SIZE, Constants.GCM_TAG_SIZE).CopyTo(tag);
 
-            // Prepare AAD: chunk number + header nonce
-            byte[] headerNonce = headerImpl.GetNonce();
-            byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(chunkNumber);
-            byte[] aad = ByteBuffers.Concat(chunkNumberBytes, headerNonce);
-            
-            // Debug: Log AAD
-            Debug.WriteLine($"Decrypting chunk {chunkNumber} with AAD length: {aad.Length}");
+            // Prepare AAD if authentication is enabled
+            byte[] aad = Array.Empty<byte>();
+            if (authenticate && !CanSkipAuthentication())
+            {
+                // Prepare AAD: chunk number + header nonce
+                byte[] headerNonce = headerImpl.GetNonce();
+                byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(chunkNumber);
+                aad = ByteBuffers.Concat(chunkNumberBytes, headerNonce);
+                Debug.WriteLine($"Decrypting chunk {chunkNumber} with AAD length: {aad.Length}");
+            }
+
+            Debug.WriteLine($"Decrypting chunk {chunkNumber} with size: {ciphertextChunk.Length}");
+            Debug.WriteLine($"Decrypting chunk {chunkNumber} with nonce: {BitConverter.ToString(nonce)}");
+            Debug.WriteLine($"Decryption tag for chunk {chunkNumber}: {BitConverter.ToString(tag)}");
+
+            using DestroyableSecretKey contentKey = headerImpl.GetContentKey().Copy();
 
             try
             {
-                using DestroyableSecretKey contentKey = headerImpl.GetContentKey().Copy();
-
-                // Decrypt using AES-GCM
                 using var aesGcm = new AesGcm(contentKey.GetRaw());
+
+                // Extract ciphertext payload (without nonce and tag)
+                ReadOnlySpan<byte> ciphertextPayload = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE, payloadSize).Span;
 
                 try
                 {
-                    // Decrypt
                     aesGcm.Decrypt(
                         nonce,
-                        payload.Span,
-                        tag.Span,
+                        ciphertextPayload,
+                        tag,
                         cleartextChunk.Slice(0, payloadSize).Span,
                         aad);
-                    
-                    Debug.WriteLine($"Successfully decrypted chunk {chunkNumber}");
                 }
                 catch (CryptographicException ex)
                 {
@@ -267,8 +257,8 @@ namespace CryptomatorLib.V3
             }
             finally
             {
-                // Clean up sensitive data
                 CryptomatorLib.Common.CryptographicOperations.ZeroMemory(nonce);
+                CryptomatorLib.Common.CryptographicOperations.ZeroMemory(tag);
                 CryptomatorLib.Common.CryptographicOperations.ZeroMemory(aad);
             }
         }
@@ -321,11 +311,17 @@ namespace CryptomatorLib.V3
                 throw new ArgumentException($"Ciphertext chunk must not exceed {Constants.CHUNK_SIZE} bytes", nameof(ciphertextChunk));
             }
 
-            // Ensure cleartext buffer is large enough
-            int payloadSize = ciphertextChunk.Length - Constants.GCM_NONCE_SIZE - Constants.GCM_TAG_SIZE;
-            if (cleartextChunk.Length < payloadSize)
+            // Skip cleartext buffer check if buffer is empty (case when we're returning a new buffer)
+            if (!cleartextChunk.IsEmpty)
             {
-                throw new ArgumentException($"Cleartext chunk buffer must be at least {payloadSize} bytes", nameof(cleartextChunk));
+                // Calculate payload size (total - nonce - tag)
+                int payloadSize = ciphertextChunk.Length - Constants.GCM_NONCE_SIZE - Constants.GCM_TAG_SIZE;
+
+                // Ensure cleartext buffer is large enough
+                if (cleartextChunk.Length < payloadSize)
+                {
+                    throw new ArgumentException($"Cleartext chunk buffer must be at least {payloadSize} bytes", nameof(cleartextChunk));
+                }
             }
         }
     }

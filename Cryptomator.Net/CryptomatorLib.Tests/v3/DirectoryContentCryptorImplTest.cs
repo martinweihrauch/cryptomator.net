@@ -4,6 +4,7 @@ using CryptomatorLib.Api;
 using CryptomatorLib.V3;
 using System;
 using System.Security.Cryptography;
+using System.Collections.Generic;
 
 namespace CryptomatorLib.Tests.V3
 {
@@ -63,7 +64,7 @@ namespace CryptomatorLib.Tests.V3
         public void TestEncryptReadme()
         {
             DirectoryMetadata rootDirMetadata = dirCryptor.RootDirectoryMetadata();
-            var enc = dirCryptor.FileNameEncryptor(rootDirMetadata);
+            IDirectoryContentCryptor.Encrypting enc = dirCryptor.FileNameEncryptor(rootDirMetadata);
             string ciphertext = enc.Encrypt("WELCOME.rtf");
             Assert.AreEqual("Dx1binBPsg_KNby6KFD_2k3vZHPgo39rg4ks.uvf", ciphertext);
         }
@@ -73,7 +74,7 @@ namespace CryptomatorLib.Tests.V3
         public void TestDecryptReadme()
         {
             DirectoryMetadata rootDirMetadata = dirCryptor.RootDirectoryMetadata();
-            var dec = dirCryptor.FileNameDecryptor(rootDirMetadata);
+            IDirectoryContentCryptor.Decrypting dec = dirCryptor.FileNameDecryptor(rootDirMetadata);
             string plaintext = dec.Decrypt("Dx1binBPsg_KNby6KFD_2k3vZHPgo39rg4ks.uvf");
             Assert.AreEqual("WELCOME.rtf", plaintext);
         }
@@ -91,15 +92,15 @@ namespace CryptomatorLib.Tests.V3
         public class WithDirectoryMetadata
         {
             private DirectoryMetadataImpl dirUvf;
-            private CryptomatorLib.Api.IDirectoryContentCryptor.Encrypting enc;
-            private CryptomatorLib.Api.IDirectoryContentCryptor.Decrypting dec;
+            private IDirectoryContentCryptor.Encrypting enc;
+            private IDirectoryContentCryptor.Decrypting dec;
 
             [TestInitialize]
             public void Setup()
             {
-                dirUvf = new DirectoryMetadataImpl(masterkey.GetCurrentRevision(), new byte[32]);
-                enc = dirCryptor.FileNameEncryptor(dirUvf);
-                dec = dirCryptor.FileNameDecryptor(dirUvf);
+                dirUvf = new DirectoryMetadataImpl(DirectoryContentCryptorImplTest.masterkey.GetCurrentRevision(), new byte[32]);
+                enc = DirectoryContentCryptorImplTest.dirCryptor.FileNameEncryptor(dirUvf);
+                dec = DirectoryContentCryptorImplTest.dirCryptor.FileNameDecryptor(dirUvf);
             }
 
             [DataTestMethod]
@@ -148,8 +149,8 @@ namespace CryptomatorLib.Tests.V3
             [DisplayName("Decrypt file with incorrect seed")]
             public void TestDecryptMalformed3()
             {
-                DirectoryMetadataImpl differentRevision = new DirectoryMetadataImpl(masterkey.GetFirstRevision(), new byte[32]);
-                var differentRevisionDec = dirCryptor.FileNameDecryptor(differentRevision);
+                DirectoryMetadataImpl differentRevision = new DirectoryMetadataImpl(DirectoryContentCryptorImplTest.masterkey.GetFirstRevision(), new byte[32]);
+                IDirectoryContentCryptor.Decrypting differentRevisionDec = DirectoryContentCryptorImplTest.dirCryptor.FileNameDecryptor(differentRevision);
                 Assert.ThrowsException<AuthenticationFailedException>(() =>
                 {
                     differentRevisionDec.Decrypt("NIWamUJBS3u619f3yKOWlT2q_raURsHXhg==.uvf");
@@ -160,8 +161,8 @@ namespace CryptomatorLib.Tests.V3
             [DisplayName("Decrypt file with incorrect dirId")]
             public void TestDecryptMalformed4()
             {
-                DirectoryMetadataImpl differentDirId = new DirectoryMetadataImpl(masterkey.GetFirstRevision(), new byte[] { 0xDE, 0x0A, 0xD });
-                var differentDirIdDec = dirCryptor.FileNameDecryptor(differentDirId);
+                DirectoryMetadataImpl differentDirId = new DirectoryMetadataImpl(DirectoryContentCryptorImplTest.masterkey.GetFirstRevision(), new byte[] { 0xDE, 0xAD });
+                IDirectoryContentCryptor.Decrypting differentDirIdDec = DirectoryContentCryptorImplTest.dirCryptor.FileNameDecryptor(differentDirId);
                 Assert.ThrowsException<AuthenticationFailedException>(() =>
                 {
                     differentDirIdDec.Decrypt("NIWamUJBS3u619f3yKOWlT2q_raURsHXhg==.uvf");
