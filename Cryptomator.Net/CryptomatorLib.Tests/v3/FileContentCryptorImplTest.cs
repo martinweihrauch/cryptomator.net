@@ -1,6 +1,7 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using CryptomatorLib.Api;
 using CryptomatorLib.Common;
+using CommonConstants = CryptomatorLib.Common.Constants;
 using CryptomatorLib.Tests.Common;
 using CryptomatorLib.V3;
 using System;
@@ -80,7 +81,7 @@ namespace CryptomatorLib.Tests.V3
             public void TestEncryptChunkOfInvalidSize()
             {
                 // Arrange
-                ReadOnlyMemory<byte> oversizedCleartext = new Memory<byte>(new byte[Constants.PAYLOAD_SIZE + 1]);
+                ReadOnlyMemory<byte> oversizedCleartext = new Memory<byte>(new byte[CommonConstants.PAYLOAD_SIZE + 1]);
 
                 // Act & Assert
                 Assert.ThrowsException<ArgumentException>(() =>
@@ -114,10 +115,10 @@ namespace CryptomatorLib.Tests.V3
                     "Ciphertext should be different from plaintext");
 
                 // Verify that the ciphertext has the expected size
-                Assert.AreEqual(Constants.CHUNK_SIZE, ciphertext.Length);
+                Assert.AreEqual(CommonConstants.CHUNK_SIZE, ciphertext.Length);
 
                 // Verify the nonce is set correctly (first bytes should be 0x33)
-                for (int i = 0; i < Constants.GCM_NONCE_SIZE; i++)
+                for (int i = 0; i < CommonConstants.GCM_NONCE_SIZE; i++)
                 {
                     Assert.AreEqual(0x33, ciphertext.Span[i]);
                 }
@@ -129,7 +130,7 @@ namespace CryptomatorLib.Tests.V3
             {
                 // Arrange
                 ReadOnlyMemory<byte> cleartextData = Encoding.ASCII.GetBytes("hello world");
-                Memory<byte> ciphertextBuffer = new Memory<byte>(new byte[Constants.CHUNK_SIZE - 1]);
+                Memory<byte> ciphertextBuffer = new Memory<byte>(new byte[CommonConstants.CHUNK_SIZE - 1]);
 
                 // Act & Assert
                 Assert.ThrowsException<ArgumentException>(() =>
@@ -142,8 +143,8 @@ namespace CryptomatorLib.Tests.V3
         {
             [TestMethod]
             [DataRow(0, DisplayName = "Test Decrypt Empty Chunk")]
-            [DataRow(Constants.GCM_NONCE_SIZE + Constants.GCM_TAG_SIZE - 1, DisplayName = "Test Decrypt Too Small Chunk")]
-            [DataRow(Constants.CHUNK_SIZE + 1, DisplayName = "Test Decrypt Too Large Chunk")]
+            [DataRow(CommonConstants.GCM_NONCE_SIZE + CommonConstants.GCM_TAG_SIZE - 1, DisplayName = "Test Decrypt Too Small Chunk")]
+            [DataRow(CommonConstants.CHUNK_SIZE + 1, DisplayName = "Test Decrypt Too Large Chunk")]
             public void TestDecryptChunkOfInvalidSize(int size)
             {
                 // Arrange
@@ -159,7 +160,7 @@ namespace CryptomatorLib.Tests.V3
             public void TestDecryptWithAuthenticationDisabled()
             {
                 // GCM requires authentication, so this should throw
-                ReadOnlyMemory<byte> ciphertext = new Memory<byte>(new byte[Constants.CHUNK_SIZE]);
+                ReadOnlyMemory<byte> ciphertext = new Memory<byte>(new byte[CommonConstants.CHUNK_SIZE]);
 
                 Assert.ThrowsException<ArgumentException>(() =>
                     _fileContentCryptor.DecryptChunk(ciphertext, 0, _header, false));
@@ -176,7 +177,7 @@ namespace CryptomatorLib.Tests.V3
 
                 // Tamper with the ciphertext (change a byte in the encrypted data)
                 byte[] tamperedBytes = ciphertext.ToArray();
-                tamperedBytes[Constants.GCM_NONCE_SIZE + 1] ^= 0x01;  // flip one bit
+                tamperedBytes[CommonConstants.GCM_NONCE_SIZE + 1] ^= 0x01;  // flip one bit
                 ReadOnlyMemory<byte> tamperedCiphertext = new ReadOnlyMemory<byte>(tamperedBytes);
 
                 // Attempt to decrypt tampered data

@@ -4,53 +4,33 @@ using System.Security.Cryptography;
 namespace CryptomatorLib.Tests.Common.TestUtilities
 {
     /// <summary>
-    /// A mock implementation of SecureRandom for testing
-    /// This is meant to simulate the behavior from Java's SecureRandom
+    /// A secure random number generator for cryptographic operations
     /// </summary>
     public class SecureRandom
     {
         private readonly RandomNumberGenerator _rng;
-        private readonly byte[] _seed;
         
         public SecureRandom()
         {
             _rng = RandomNumberGenerator.Create();
-            _seed = new byte[32];
-            _rng.GetBytes(_seed);
         }
         
-        public SecureRandom(byte[] seed)
+        public void NextBytes(byte[] buffer)
         {
-            _rng = RandomNumberGenerator.Create();
-            _seed = seed ?? throw new ArgumentNullException(nameof(seed));
+            if (buffer == null)
+                throw new ArgumentNullException(nameof(buffer));
+            
+            _rng.GetBytes(buffer);
         }
         
-        public void SetSeed(byte[] seed)
+        public byte[] NextBytes(int count)
         {
-            if (seed == null)
-                throw new ArgumentNullException(nameof(seed));
-                
-            Buffer.BlockCopy(seed, 0, _seed, 0, Math.Min(seed.Length, _seed.Length));
-        }
-        
-        public void NextBytes(byte[] bytes)
-        {
-            if (bytes == null)
-                throw new ArgumentNullException(nameof(bytes));
-                
-            _rng.GetBytes(bytes);
-        }
-        
-        public byte[] GenerateSeed(int numBytes)
-        {
-            byte[] seed = new byte[numBytes];
-            _rng.GetBytes(seed);
-            return seed;
-        }
-        
-        public void Dispose()
-        {
-            _rng.Dispose();
+            if (count < 0)
+                throw new ArgumentOutOfRangeException(nameof(count));
+            
+            byte[] buffer = new byte[count];
+            _rng.GetBytes(buffer);
+            return buffer;
         }
     }
 } 

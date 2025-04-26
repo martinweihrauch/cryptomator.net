@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using CryptomatorLib.Api;
+using CryptomatorLib.Common;
 
 namespace CryptomatorLib.Tests.Streams
 {
@@ -190,8 +191,11 @@ namespace CryptomatorLib.Tests.Streams
             _bufferPosition = 0;
             _bufferFilled = 0;
             
+            // Calculate the expected size for the current chunk
+            int expectedChunkSize = _cryptor.FileContentCryptor().CiphertextChunkSize();
+            
             // Read from the base stream
-            int bytesRead = _baseStream.Read(_buffer, 0, _buffer.Length);
+            int bytesRead = _baseStream.Read(_buffer, 0, expectedChunkSize);
             
             if (bytesRead == 0)
             {
@@ -202,20 +206,49 @@ namespace CryptomatorLib.Tests.Streams
             try
             {
                 // Decrypt the chunk
+                if (_header == null)
+                {
+                    throw new InvalidOperationException("Header not initialized");
+                }
+                
+                // Make sure we have enough data for a valid chunk (at minimum nonce + tag)
+                int minSize = Constants.GCM_NONCE_SIZE + Constants.GCM_TAG_SIZE;
+                if (bytesRead < minSize)
+                {
+                    throw new IOException($"Incomplete chunk: expected at least {minSize} bytes, got {bytesRead}");
+                }
+                
                 ReadOnlyMemory<byte> ciphertext = new ReadOnlyMemory<byte>(_buffer, 0, bytesRead);
-                Memory<byte> cleartext = new Memory<byte>(_decryptedBuffer);
                 
-                _cryptor.FileContentCryptor().DecryptChunk(ciphertext, cleartext, _chunksRead, _header, _authenticate);
+                // Allocate buffer for the decrypted data
+                var cleartextBuffer = new Memory<byte>(new byte[_cryptor.FileContentCryptor().CleartextChunkSize()]);
                 
-                // Set the buffer filled size to the cleartext chunk size
-                _bufferFilled = _cryptor.FileContentCryptor().CleartextChunkSize();
+                try
+                {
+                    // Decrypt directly into the cleartext buffer
+                    _cryptor.FileContentCryptor().DecryptChunk(ciphertext, cleartextBuffer, _chunksRead, _header, _authenticate);
+                    
+                    // Calculate actual cleartext size (payload size)
+                    int payloadSize = bytesRead - Constants.GCM_NONCE_SIZE - Constants.GCM_TAG_SIZE;
+                    
+                    // Copy only the valid data to the decrypted buffer
+                    cleartextBuffer.Slice(0, payloadSize).CopyTo(_decryptedBuffer);
+                    
+                    // Set the buffer filled size based on the actual cleartext size
+                    _bufferFilled = payloadSize;
+                }
+                catch (Exception ex) when (ex is AuthenticationFailedException || 
+                                          (ex is IOException && ex.InnerException is AuthenticationFailedException))
+                {
+                    throw new IOException($"Authentication failed for chunk {_chunksRead}", ex);
+                }
                 
                 // Increment chunks read
                 _chunksRead++;
             }
             catch (Exception ex)
             {
-                throw new IOException("Failed to decrypt chunk", ex);
+                throw new IOException($"Failed to decrypt chunk {_chunksRead}", ex);
             }
         }
     }

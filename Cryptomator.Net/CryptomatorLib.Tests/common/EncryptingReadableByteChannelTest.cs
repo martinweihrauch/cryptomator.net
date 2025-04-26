@@ -12,7 +12,7 @@ namespace CryptomatorLib.Tests.Common
     public class EncryptingReadableByteChannelTest
     {
         private byte[] _dstFile;
-        private SeekableByteChannelMock _srcFileChannel;
+        private MemoryStream _dstStream;
         private Mock<Cryptor> _cryptor;
         private Mock<FileContentCryptor> _contentCryptor;
         private Mock<FileHeaderCryptor> _headerCryptor;
@@ -22,7 +22,7 @@ namespace CryptomatorLib.Tests.Common
         public void Setup()
         {
             _dstFile = new byte[100];
-            _srcFileChannel = new SeekableByteChannelMock(_dstFile);
+            _dstStream = new MemoryStream();
             _cryptor = new Mock<Cryptor>();
             _contentCryptor = new Mock<FileContentCryptor>();
             _headerCryptor = new Mock<FileHeaderCryptor>();

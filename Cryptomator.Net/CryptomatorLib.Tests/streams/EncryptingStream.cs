@@ -177,7 +177,7 @@ namespace CryptomatorLib.Tests.Streams
             if (_bufferPosition > 0)
             {
                 // Calculate chunk number based on position
-                long chunkNumber = (_position - _bufferPosition) / _buffer.Length;
+                long chunkNumber = (_position - _bufferPosition) / _cryptor.FileContentCryptor().CleartextChunkSize();
                 
                 // If buffer is not full, zero the remainder
                 if (_bufferPosition < _buffer.Length)
@@ -185,13 +185,19 @@ namespace CryptomatorLib.Tests.Streams
                     Array.Clear(_buffer, _bufferPosition, _buffer.Length - _bufferPosition);
                 }
                 
-                // Encrypt the buffer
+                // Encrypt the buffer - only encrypt the actual data, not the whole buffer
                 ReadOnlyMemory<byte> cleartext = new ReadOnlyMemory<byte>(_buffer, 0, _bufferPosition);
-                Memory<byte> ciphertext = new Memory<byte>(_encryptedBuffer);
-                _cryptor.FileContentCryptor().EncryptChunk(cleartext, ciphertext, chunkNumber, _header);
+                
+                // Create a buffer of the exact size needed for the ciphertext
+                int ciphertextSize = _cryptor.FileContentCryptor().CiphertextChunkSize();
+                var ciphertextBuffer = new Memory<byte>(new byte[ciphertextSize]);
+                
+                // Encrypt directly into the ciphertext buffer
+                _cryptor.FileContentCryptor().EncryptChunk(cleartext, ciphertextBuffer, chunkNumber, _header);
                 
                 // Write the encrypted data
-                _baseStream.Write(_encryptedBuffer, 0, _cryptor.FileContentCryptor().CiphertextChunkSize());
+                byte[] encryptedData = ciphertextBuffer.ToArray();
+                _baseStream.Write(encryptedData, 0, encryptedData.Length);
                 
                 // Reset the buffer position
                 _bufferPosition = 0;

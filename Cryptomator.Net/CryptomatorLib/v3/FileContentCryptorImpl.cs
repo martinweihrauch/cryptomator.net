@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using CryptomatorLib.Api;
 using CryptomatorLib.Common;
@@ -113,17 +114,23 @@ namespace CryptomatorLib.V3
 
             FileHeaderImpl headerImpl = FileHeaderImpl.Cast(header);
 
-            // Generate random nonce
+            // Generate nonce (IV)
             byte[] nonce = new byte[Constants.GCM_NONCE_SIZE];
             _random.GetBytes(nonce);
+            
+            // Debug: Log nonce values
+            Debug.WriteLine($"Encrypting chunk {chunkNumber} with nonce: {BitConverter.ToString(nonce)}");
 
-            // Copy nonce to output
-            nonce.CopyTo(ciphertextChunk.Slice(0, Constants.GCM_NONCE_SIZE));
+            // Copy nonce to beginning of ciphertext
+            nonce.CopyTo(ciphertextChunk);
 
             // Prepare AAD: chunk number + header nonce
             byte[] headerNonce = headerImpl.GetNonce();
             byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(chunkNumber);
             byte[] aad = ByteBuffers.Concat(chunkNumberBytes, headerNonce);
+
+            // Debug: Log AAD
+            Debug.WriteLine($"Encrypting chunk {chunkNumber} with AAD length: {aad.Length}");
 
             try
             {
@@ -141,11 +148,15 @@ namespace CryptomatorLib.V3
                     tag,
                     aad);
 
+                // Debug: Log tag
+                Debug.WriteLine($"Encryption tag for chunk {chunkNumber}: {BitConverter.ToString(tag)}");
+
                 // Copy tag to output
                 tag.CopyTo(ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE + cleartextChunk.Length, Constants.GCM_TAG_SIZE));
             }
             catch (CryptographicException ex)
             {
+                Debug.WriteLine($"Encryption failed for chunk {chunkNumber}: {ex.Message}");
                 throw new CryptoException("Encryption failed", ex);
             }
             finally
@@ -173,6 +184,9 @@ namespace CryptomatorLib.V3
                 throw new ArgumentException("Authentication cannot be disabled for GCM", nameof(authenticate));
             }
 
+            // Debug: Log chunk size
+            Debug.WriteLine($"Decrypting chunk {chunkNumber} with size: {ciphertextChunk.Length}");
+
             // Allocate buffer for plaintext - size is payload size to handle any payload up to the maximum
             var cleartextChunk = new Memory<byte>(new byte[Constants.PAYLOAD_SIZE]);
 
@@ -181,6 +195,8 @@ namespace CryptomatorLib.V3
 
             // Trim to actual size
             int payloadSize = ciphertextChunk.Length - Constants.GCM_NONCE_SIZE - Constants.GCM_TAG_SIZE;
+            Debug.WriteLine($"Decrypted chunk {chunkNumber} payload size: {payloadSize}");
+            
             return cleartextChunk.Slice(0, payloadSize);
         }
 
@@ -201,6 +217,9 @@ namespace CryptomatorLib.V3
 
             // Extract nonce from ciphertext
             byte[] nonce = ciphertextChunk.Slice(0, Constants.GCM_NONCE_SIZE).ToArray();
+            
+            // Debug: Log nonce values
+            Debug.WriteLine($"Decrypting chunk {chunkNumber} with nonce: {BitConverter.ToString(nonce)}");
 
             // Calculate payload size (ciphertext minus nonce and tag)
             int payloadSize = ciphertextChunk.Length - Constants.GCM_NONCE_SIZE - Constants.GCM_TAG_SIZE;
@@ -208,11 +227,18 @@ namespace CryptomatorLib.V3
             // Extract encrypted payload and tag
             ReadOnlyMemory<byte> payload = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE, payloadSize);
             ReadOnlyMemory<byte> tag = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE + payloadSize, Constants.GCM_TAG_SIZE);
+            
+            // Debug log tag
+            byte[] tagBytes = tag.ToArray();
+            Debug.WriteLine($"Decryption tag for chunk {chunkNumber}: {BitConverter.ToString(tagBytes)}");
 
             // Prepare AAD: chunk number + header nonce
             byte[] headerNonce = headerImpl.GetNonce();
             byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(chunkNumber);
             byte[] aad = ByteBuffers.Concat(chunkNumberBytes, headerNonce);
+            
+            // Debug: Log AAD
+            Debug.WriteLine($"Decrypting chunk {chunkNumber} with AAD length: {aad.Length}");
 
             try
             {
@@ -230,9 +256,12 @@ namespace CryptomatorLib.V3
                         tag.Span,
                         cleartextChunk.Slice(0, payloadSize).Span,
                         aad);
+                    
+                    Debug.WriteLine($"Successfully decrypted chunk {chunkNumber}");
                 }
                 catch (CryptographicException ex)
                 {
+                    Debug.WriteLine($"Authentication failed for chunk {chunkNumber}: {ex.Message}");
                     throw new AuthenticationFailedException("Content tag mismatch", ex);
                 }
             }

@@ -1,8 +1,10 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using CryptomatorLib.Api;
 using CryptomatorLib.Common;
+using CommonConstants = CryptomatorLib.Common.Constants;
 using CryptomatorLib.Tests.Common;
 using CryptomatorLib.V3;
+using V3Constants = CryptomatorLib.V3.Constants;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
@@ -125,7 +127,7 @@ namespace CryptomatorLib.Tests.V3
 
             // Tamper with the content (avoid magic bytes at the beginning)
             byte[] tamperedHeader = encryptedHeader.ToArray();
-            tamperedHeader[Constants.UVF_MAGIC_BYTES.Length + 5] ^= 0x01; // Flip one bit in the content
+            tamperedHeader[V3Constants.UVF_MAGIC_BYTES.Length + 5] ^= 0x01; // Flip one bit in the content
 
             // Attempt to decrypt the tampered header
             Assert.ThrowsException<AuthenticationFailedException>(() =>

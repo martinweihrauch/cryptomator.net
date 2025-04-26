@@ -5,14 +5,19 @@ using System.Security.Cryptography;
 using System.Text;
 using CryptomatorLib.Api;
 using CryptomatorLib.Common;
+using CryptomatorLib.vaulting.masterkey;
 
 namespace CryptomatorLib.Tests.Common
 {
     /// <summary>
-    /// Mock implementation of UVFMasterkey for testing.
+    /// Mock implementation of UVFMasterkey for testing purposes
     /// </summary>
     public class MockUVFMasterkey : UVFMasterkey
     {
+        private readonly Dictionary<int, byte[]> _seedMap;
+        private readonly byte[] _kdfSalt;
+        private readonly int _initialSeed;
+        private readonly int _latestSeed;
         private readonly byte[] _encKey;
         private readonly byte[] _macKey;
         private readonly byte[] _rawKey;
@@ -21,22 +26,22 @@ namespace CryptomatorLib.Tests.Common
         /// <summary>
         /// The dictionary of seed IDs to seed values.
         /// </summary>
-        public Dictionary<int, byte[]> Seeds { get; }
+        public Dictionary<int, byte[]> Seeds => _seedMap;
 
         /// <summary>
         /// The KDF salt used for key derivation.
         /// </summary>
-        public byte[] KdfSalt { get; }
+        public byte[] KdfSalt => _kdfSalt;
 
         /// <summary>
         /// The initial seed ID.
         /// </summary>
-        public int InitialSeed { get; }
+        public int InitialSeed => _initialSeed;
 
         /// <summary>
         /// The latest seed ID.
         /// </summary>
-        public int LatestSeed { get; }
+        public int LatestSeed => _latestSeed;
 
         /// <summary>
         /// The root directory ID.
@@ -51,16 +56,20 @@ namespace CryptomatorLib.Tests.Common
         /// <summary>
         /// Creates a mock UVF masterkey with the specified seeds and salt.
         /// </summary>
-        /// <param name="seeds">Dictionary mapping seed IDs to seed values</param>
+        /// <param name="seedMap">Dictionary mapping seed IDs to seed values</param>
         /// <param name="kdfSalt">Salt value for key derivation</param>
-        /// <param name="initialSeedId">ID of the initial seed</param>
-        /// <param name="latestSeedId">ID of the latest seed</param>
-        public MockUVFMasterkey(Dictionary<int, byte[]> seeds, byte[] kdfSalt, int initialSeedId, int latestSeedId)
+        /// <param name="initialSeed">ID of the initial seed</param>
+        /// <param name="latestSeed">ID of the latest seed</param>
+        public MockUVFMasterkey(
+            Dictionary<int, byte[]> seedMap,
+            byte[] kdfSalt,
+            int initialSeed,
+            int latestSeed)
         {
-            Seeds = seeds ?? throw new ArgumentNullException(nameof(seeds));
-            KdfSalt = kdfSalt ?? throw new ArgumentNullException(nameof(kdfSalt));
-            InitialSeed = initialSeedId;
-            LatestSeed = latestSeedId;
+            _seedMap = seedMap ?? throw new ArgumentNullException(nameof(seedMap));
+            _kdfSalt = kdfSalt ?? throw new ArgumentNullException(nameof(kdfSalt));
+            _initialSeed = initialSeed;
+            _latestSeed = latestSeed;
             
             // Generate a root directory ID for testing
             RootDirId = new byte[16];
@@ -269,7 +278,7 @@ namespace CryptomatorLib.Tests.Common
             
             // Create a deep copy of seeds
             var seedsCopy = new Dictionary<int, byte[]>();
-            foreach (var kvp in Seeds)
+            foreach (var kvp in _seedMap)
             {
                 var seedCopy = new byte[kvp.Value.Length];
                 Buffer.BlockCopy(kvp.Value, 0, seedCopy, 0, kvp.Value.Length);
@@ -277,10 +286,10 @@ namespace CryptomatorLib.Tests.Common
             }
             
             // Create a copy of KdfSalt
-            var kdfSaltCopy = new byte[KdfSalt.Length];
-            Buffer.BlockCopy(KdfSalt, 0, kdfSaltCopy, 0, KdfSalt.Length);
+            var kdfSaltCopy = new byte[_kdfSalt.Length];
+            Buffer.BlockCopy(_kdfSalt, 0, kdfSaltCopy, 0, _kdfSalt.Length);
             
-            return new MockUVFMasterkey(seedsCopy, kdfSaltCopy, InitialSeed, LatestSeed);
+            return new MockUVFMasterkey(seedsCopy, kdfSaltCopy, _initialSeed, _latestSeed);
         }
         
         /// <summary>
@@ -397,6 +406,26 @@ namespace CryptomatorLib.Tests.Common
                 Destroy();
                 GC.SuppressFinalize(this);
             }
+        }
+
+        public override Dictionary<int, byte[]> GetSeedMap()
+        {
+            return _seedMap;
+        }
+
+        public override byte[] GetKdfSalt()
+        {
+            return _kdfSalt;
+        }
+
+        public override int GetInitialSeed()
+        {
+            return _initialSeed;
+        }
+
+        public override int GetLatestSeed()
+        {
+            return _latestSeed;
         }
     }
 } 

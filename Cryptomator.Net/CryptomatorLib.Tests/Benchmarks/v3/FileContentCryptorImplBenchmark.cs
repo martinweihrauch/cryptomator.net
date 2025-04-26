@@ -4,6 +4,7 @@ using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Order;
 using CryptomatorLib.Api;
 using CryptomatorLib.Common;
+using CommonConstants = CryptomatorLib.Common.Constants;
 using CryptomatorLib.Tests.Common;
 using CryptomatorLib.V3;
 
@@ -80,9 +81,9 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
             // Create file header for testing
             _header = new FileHeaderImpl(1, _headerNonce, _encKey);
             
-            _cleartextChunk = new Memory<byte>(new byte[Constants.PAYLOAD_SIZE]);
-            _ciphertextChunk = new Memory<byte>(new byte[Constants.CHUNK_SIZE]);
-            _decryptedChunk = new Memory<byte>(new byte[Constants.PAYLOAD_SIZE]);
+            _cleartextChunk = new Memory<byte>(new byte[CommonConstants.PAYLOAD_SIZE]);
+            _ciphertextChunk = new Memory<byte>(new byte[CommonConstants.CHUNK_SIZE]);
+            _decryptedChunk = new Memory<byte>(new byte[CommonConstants.PAYLOAD_SIZE]);
             
             _fileContentCryptor = new FileContentCryptorImpl(revolvingMasterkey, _randomMock);
 
