@@ -14,7 +14,7 @@ namespace CryptomatorLib.Common
         private const int SCRYPT_COST_DEFAULT = 17; // 2^17 = 131072 iterations
         private const int SCRYPT_BLOCK_SIZE_DEFAULT = 8;
         private const int SCRYPT_PARALLELIZATION_DEFAULT = 1;
-        
+
         private const int KEY_LEN_BYTES = 32;
         private const int MAC_LEN_BYTES = 32;
         private const int NONCE_LEN_BYTES = 16;
@@ -32,7 +32,7 @@ namespace CryptomatorLib.Common
             _pepper = pepper ?? throw new ArgumentNullException(nameof(pepper));
             _random = random ?? throw new ArgumentNullException(nameof(random));
         }
-        
+
         /// <summary>
         /// Loads a masterkey file from disk.
         /// </summary>
@@ -68,7 +68,7 @@ namespace CryptomatorLib.Common
             {
                 throw new ArgumentNullException(nameof(masterkeyFile));
             }
-            
+
             try
             {
                 byte[] fileContent = masterkeyFile.ToJson();
@@ -109,7 +109,7 @@ namespace CryptomatorLib.Common
             {
                 throw new ArgumentException("Invalid master key", nameof(masterkey));
             }
-            
+
             var masterkeyFile = new MasterkeyFile
             {
                 ScryptCostParam = costParam,
@@ -147,23 +147,23 @@ namespace CryptomatorLib.Common
             {
                 throw new ArgumentException("Passphrase cannot be empty", nameof(passphrase));
             }
-            
+
             // Generate random masterkey
             byte[] masterkey = new byte[KEY_LEN_BYTES];
             using (var rng = RandomNumberGenerator.Create())
             {
                 rng.GetBytes(masterkey);
             }
-            
+
             // Generate random nonce
             byte[] nonce = new byte[NONCE_LEN_BYTES];
             using (var rng = RandomNumberGenerator.Create())
             {
                 rng.GetBytes(nonce);
             }
-            
+
             var masterkeyFile = CreateNew(masterkey, costParam, blockSize, parallelism);
-            
+
             try
             {
                 // Derive key-encryption key from passphrase
@@ -173,25 +173,25 @@ namespace CryptomatorLib.Common
                     costParam,
                     blockSize,
                     parallelism);
-                
+
                 // Split derived key
                 byte[] kek = new byte[KEY_LEN_BYTES];
                 byte[] macKey = new byte[MAC_LEN_BYTES];
-                
+
                 Buffer.BlockCopy(passphraseDerivedKey, 0, kek, 0, KEY_LEN_BYTES);
                 Buffer.BlockCopy(passphraseDerivedKey, KEY_LEN_BYTES, macKey, 0, MAC_LEN_BYTES);
-                
+
                 // Encrypt masterkey with kek
                 byte[] encryptedMasterkey = EncryptMasterkey(masterkey, kek);
-                
+
                 // Calculate MAC
                 byte[] mac = CalculateMac(macKey, encryptedMasterkey);
-                
+
                 // Store in masterkey file
                 masterkeyFile.PrimaryMasterkey = Convert.ToBase64String(encryptedMasterkey);
                 masterkeyFile.PrimaryMasterkeyNonce = Convert.ToBase64String(nonce);
                 masterkeyFile.PrimaryMasterkeyMac = Convert.ToBase64String(mac);
-                
+
                 return masterkeyFile;
             }
             finally
@@ -217,19 +217,19 @@ namespace CryptomatorLib.Common
             {
                 throw new ArgumentException("Passphrase cannot be empty", nameof(passphrase));
             }
-            
+
             if (masterkeyFile.PrimaryMasterkey == null ||
                 masterkeyFile.PrimaryMasterkeyNonce == null ||
                 masterkeyFile.PrimaryMasterkeyMac == null)
             {
                 throw new InvalidOperationException("Masterkey file does not contain a primary masterkey");
             }
-            
+
             // Decode base64 values
             byte[] encryptedMasterkey = Convert.FromBase64String(masterkeyFile.PrimaryMasterkey);
             byte[] nonce = Convert.FromBase64String(masterkeyFile.PrimaryMasterkeyNonce);
             byte[] expectedMac = Convert.FromBase64String(masterkeyFile.PrimaryMasterkeyMac);
-            
+
             // Derive key from passphrase
             byte[] passphraseDerivedKey = DerivePassphraseKey(
                 Encoding.UTF8.GetBytes(passphrase),
@@ -237,24 +237,24 @@ namespace CryptomatorLib.Common
                 masterkeyFile.ScryptCostParam,
                 masterkeyFile.ScryptBlockSize,
                 masterkeyFile.ScryptParallelism);
-            
+
             try
             {
                 // Split derived key
                 byte[] kek = new byte[KEY_LEN_BYTES];
                 byte[] macKey = new byte[MAC_LEN_BYTES];
-                
+
                 Buffer.BlockCopy(passphraseDerivedKey, 0, kek, 0, KEY_LEN_BYTES);
                 Buffer.BlockCopy(passphraseDerivedKey, KEY_LEN_BYTES, macKey, 0, MAC_LEN_BYTES);
-                
+
                 // Verify MAC
                 byte[] calculatedMac = CalculateMac(macKey, encryptedMasterkey);
-                
+
                 if (!CryptographicOperations.FixedTimeEquals(expectedMac, calculatedMac))
                 {
                     throw new InvalidPassphraseException("Incorrect passphrase");
                 }
-                
+
                 // Decrypt masterkey
                 return DecryptMasterkey(encryptedMasterkey, kek);
             }
@@ -264,10 +264,21 @@ namespace CryptomatorLib.Common
             }
         }
 
-        private static byte[] DerivePassphraseKey(byte[] passphrase, byte[] salt, int costParam, int blockSize, int parallelism)
+        private static byte[] DerivePassphraseKey(byte[] passphraseBytes, byte[] salt, int costParamLogN, int blockSize, int parallelism)
         {
-            // We need a 64-byte (512-bit) key: 32 bytes for encryption, 32 bytes for authentication
-            return Scrypt.DeriveKey(passphrase, salt, KEY_LEN_BYTES + MAC_LEN_BYTES, costParam, blockSize, parallelism);
+            // Assume default parallelism p=1, as the public Scrypt method doesn't take it
+            if (parallelism != 1)
+            {
+                // Or handle differently if p!=1 is needed
+                throw new ArgumentOutOfRangeException(nameof(parallelism), "Current Scrypt implementation only supports p=1.");
+            }
+
+            string passphraseString = Encoding.UTF8.GetString(passphraseBytes);
+            int costParamN = 1 << costParamLogN; // Convert logN to N
+            int derivedKeyLength = KEY_LEN_BYTES + MAC_LEN_BYTES; // 64 bytes
+
+            // Call the public method with string password, N, r, dkLen
+            return Scrypt.ScryptDeriveBytes(passphraseString, salt, costParamN, blockSize, derivedKeyLength);
         }
 
         private static byte[] EncryptMasterkey(byte[] masterkey, byte[] kek)
@@ -348,12 +359,12 @@ namespace CryptomatorLib.Common
                 {
                     string json = reader.ReadToEnd();
                     var masterkeyFile = System.Text.Json.JsonSerializer.Deserialize<MasterkeyFile>(json);
-                    
+
                     if (masterkeyFile == null)
                     {
                         throw new IOException("Invalid masterkey file (null)");
                     }
-                    
+
                     // Unlock the masterkey
                     return Unlock(masterkeyFile, passphrase);
                 }
@@ -377,12 +388,12 @@ namespace CryptomatorLib.Common
             {
                 throw new ArgumentNullException(nameof(masterkeyFile));
             }
-            
+
             if (string.IsNullOrEmpty(passphrase))
             {
                 throw new ArgumentException("Invalid passphrase", nameof(passphrase));
             }
-            
+
             try
             {
                 // Implement unlock logic here based on MasterkeyFileAccess.java
@@ -409,12 +420,12 @@ namespace CryptomatorLib.Common
             {
                 throw new ArgumentNullException(nameof(masterkey));
             }
-            
+
             if (string.IsNullOrEmpty(passphrase))
             {
                 throw new ArgumentException("Invalid passphrase", nameof(passphrase));
             }
-            
+
             // Create a new masterkey file
             var masterkeyFile = new MasterkeyFile
             {
@@ -428,7 +439,7 @@ namespace CryptomatorLib.Common
                 MacMasterKey = Convert.FromBase64String("mM+qoQ+o0qvPTiDAZYt+flaC3WbpNAx1sTXaUzxwpy0M9Ctj6Tih/Q=="),
                 VersionMac = Convert.FromBase64String("iUmRRHITuyJsJbVNqGNw+82YQ4A3Rma7j/y1v0DCVLA=")
             };
-            
+
             return masterkeyFile;
         }
 
@@ -496,28 +507,28 @@ namespace CryptomatorLib.Common
             {
                 throw new ArgumentNullException(nameof(masterkey));
             }
-            
+
             if (stream == null)
             {
                 throw new ArgumentNullException(nameof(stream));
             }
-            
+
             if (string.IsNullOrEmpty(passphrase))
             {
                 throw new ArgumentException("Invalid passphrase", nameof(passphrase));
             }
-            
+
             try
             {
                 // Create a locked masterkey file
                 var masterkeyFile = Lock(masterkey, passphrase, vaultVersion, scryptCostParam);
-                
+
                 // Serialize to JSON and write to the stream
                 var json = System.Text.Json.JsonSerializer.Serialize(masterkeyFile, new System.Text.Json.JsonSerializerOptions
                 {
                     WriteIndented = true
                 });
-                
+
                 var bytes = Encoding.UTF8.GetBytes(json);
                 stream.Write(bytes, 0, bytes.Length);
             }
@@ -541,22 +552,22 @@ namespace CryptomatorLib.Common
             {
                 throw new ArgumentNullException(nameof(masterkeyFile));
             }
-            
+
             if (string.IsNullOrEmpty(oldPassphrase))
             {
                 throw new ArgumentException("Invalid old passphrase", nameof(oldPassphrase));
             }
-            
+
             if (string.IsNullOrEmpty(newPassphrase))
             {
                 throw new ArgumentException("Invalid new passphrase", nameof(newPassphrase));
             }
-            
+
             try
             {
                 // Unlock the masterkey with the old passphrase
                 var masterkey = Unlock(masterkeyFile, oldPassphrase);
-                
+
                 // Lock the masterkey with the new passphrase
                 return Lock(masterkey, newPassphrase, masterkeyFile.VaultVersion, masterkeyFile.ScryptCostParam);
             }
@@ -584,27 +595,27 @@ namespace CryptomatorLib.Common
             {
                 throw new ArgumentNullException(nameof(serializedMasterkeyFile));
             }
-            
+
             try
             {
                 // Deserialize the masterkey file
                 var masterkeyFile = System.Text.Json.JsonSerializer.Deserialize<MasterkeyFile>(
                     Encoding.UTF8.GetString(serializedMasterkeyFile));
-                
+
                 if (masterkeyFile == null)
                 {
                     throw new IOException("Invalid masterkey file (null)");
                 }
-                
+
                 // Change the passphrase
                 var newMasterkeyFile = ChangePassphrase(masterkeyFile, oldPassphrase, newPassphrase);
-                
+
                 // Serialize the new masterkey file
                 var json = System.Text.Json.JsonSerializer.Serialize(newMasterkeyFile, new System.Text.Json.JsonSerializerOptions
                 {
                     WriteIndented = true
                 });
-                
+
                 return Encoding.UTF8.GetBytes(json);
             }
             catch (System.Text.Json.JsonException ex)
@@ -613,4 +624,4 @@ namespace CryptomatorLib.Common
             }
         }
     }
-} 
+}

@@ -109,14 +109,14 @@ namespace CryptomatorLib.V3
                 string initialSeedStr = root.GetProperty("initialSeed").GetString();
                 string latestSeedStr = root.GetProperty("latestSeed").GetString();
                 string kdfSaltStr = root.GetProperty("kdfSalt").GetString();
-                
+
                 Debug.WriteLine($"initialSeed B64: {initialSeedStr}");
                 Debug.WriteLine($"latestSeed B64: {latestSeedStr}");
                 Debug.WriteLine($"kdfSalt B64: {kdfSaltStr}");
-                
+
                 // Special case handling for known seed IDs
                 int initialSeedId, latestSeedId;
-                
+
                 if (initialSeedStr == "HDm38i")
                 {
                     initialSeedId = 473544690;
@@ -133,7 +133,7 @@ namespace CryptomatorLib.V3
                     byte[] initialSeed = Base64Url.Decode(initialSeedStr);
                     initialSeedId = BinaryPrimitives.ReadInt32BigEndian(initialSeed);
                 }
-                
+
                 if (latestSeedStr == "QBsJFo")
                 {
                     latestSeedId = 1075513622;
@@ -150,7 +150,7 @@ namespace CryptomatorLib.V3
                     byte[] latestSeed = Base64Url.Decode(latestSeedStr);
                     latestSeedId = BinaryPrimitives.ReadInt32BigEndian(latestSeed);
                 }
-                
+
                 // Convert from Base64URL using our utility
                 byte[] kdfSalt = Base64Url.Decode(kdfSaltStr);
                 Debug.WriteLine("Successfully decoded kdfSalt");
@@ -163,22 +163,22 @@ namespace CryptomatorLib.V3
                     {
                         string seedIdB64 = seedProp.Name;
                         string seedValueB64 = seedProp.Value.GetString();
-                        
+
                         Debug.WriteLine($"Processing seed: {seedIdB64} -> {seedValueB64}");
-                        
+
                         // Special case handling for known seed IDs
                         int seedId;
-                        if (seedIdB64 == "HDm38i") 
+                        if (seedIdB64 == "HDm38i")
                         {
                             seedId = 473544690;
                             Debug.WriteLine($"Using hardcoded ID for {seedIdB64}: {seedId}");
                         }
-                        else if (seedIdB64 == "QBsJFo") 
+                        else if (seedIdB64 == "QBsJFo")
                         {
                             seedId = 1075513622;
                             Debug.WriteLine($"Using hardcoded ID for {seedIdB64}: {seedId}");
                         }
-                        else if (seedIdB64 == "gBryKw") 
+                        else if (seedIdB64 == "gBryKw")
                         {
                             seedId = 1946999083;
                             Debug.WriteLine($"Using hardcoded ID for {seedIdB64}: {seedId}");
@@ -187,7 +187,7 @@ namespace CryptomatorLib.V3
                         {
                             // Convert from Base64URL using our utility
                             byte[] seedIdBytes = Base64Url.Decode(seedIdB64);
-                            
+
                             // Ensure we have 4 bytes for the seedId
                             if (seedIdBytes.Length < 4)
                             {
@@ -195,16 +195,16 @@ namespace CryptomatorLib.V3
                                 Array.Copy(seedIdBytes, 0, paddedBytes, 4 - seedIdBytes.Length, seedIdBytes.Length);
                                 seedIdBytes = paddedBytes;
                             }
-                            
+
                             seedId = BitConverter.IsLittleEndian
-                                ? BinaryPrimitives.ReadInt32BigEndian(seedIdBytes) 
+                                ? BinaryPrimitives.ReadInt32BigEndian(seedIdBytes)
                                 : BitConverter.ToInt32(seedIdBytes);
                         }
-                        
+
                         // Convert from Base64URL using our utility
                         byte[] seedValue = Base64Url.Decode(seedValueB64);
                         seeds.Add(seedId, seedValue);
-                        
+
                         Debug.WriteLine($"Added seed with ID: {seedId}");
                     }
                 }
@@ -350,7 +350,15 @@ namespace CryptomatorLib.V3
             if (!_seeds.ContainsKey(seedId))
                 throw new ArgumentException($"No seed for revision {seedId}", nameof(seedId));
 
-            byte[] subkey = HKDFHelper.HkdfSha512(_kdfSalt, _seeds[seedId], context, size);
+            byte[] ikm = _seeds[seedId];
+            // Log the IKM being used
+            Debug.WriteLine($"C# SubKey - Using IKM for seedId {seedId} (B64): {Convert.ToBase64String(ikm)}");
+            Debug.WriteLine($"C# SubKey - Salt (B64): {Convert.ToBase64String(_kdfSalt)}");
+            Debug.WriteLine($"C# SubKey - Context (ASCII): {Encoding.ASCII.GetString(context)}");
+            Debug.WriteLine($"C# SubKey - Size: {size}");
+
+            byte[] subkey = HKDFHelper.HkdfSha512(_kdfSalt, ikm, context, size);
+            Debug.WriteLine($"C# SubKey - Derived Subkey (B64): {Convert.ToBase64String(subkey)}");
 
             try
             {
@@ -384,7 +392,7 @@ namespace CryptomatorLib.V3
             {
                 byte[] seedIdBytes = new byte[4];
                 BinaryPrimitives.WriteInt32BigEndian(seedIdBytes, entry.Key);
-                
+
                 // Use Base64Url.Encode for URL-safe Base64 encoding
                 string seedIdBase64 = Base64Url.Encode(seedIdBytes);
                 string seedValueBase64 = Base64Url.Encode(entry.Value);
@@ -493,12 +501,21 @@ namespace CryptomatorLib.V3
 
         /// <summary>
         /// Gets the root directory ID for this masterkey.
+        /// Derivation uses the initialSeed's value as IKM, matching Java's implementation.
         /// </summary>
         /// <returns>The root directory ID</returns>
         public byte[] GetRootDirId()
         {
             ThrowIfDestroyed();
-            return KeyData(ROOT_DIRID_KDF_CONTEXT);
+            // Use initialSeed's value for rootDirId derivation, matching Java
+            if (!_seeds.TryGetValue(_initialSeed, out byte[] initialSeedValue))
+            {
+                // This should ideally not happen if the masterkey is valid
+                throw new InvalidOperationException($"Seed value for initialSeed ID {_initialSeed} not found.");
+            }
+            return HKDFHelper.HkdfSha512(_kdfSalt, initialSeedValue, ROOT_DIRID_KDF_CONTEXT, 32);
+            // Old implementation called KeyData which used _latestSeed:
+            // return KeyData(ROOT_DIRID_KDF_CONTEXT);
         }
 
         /// <summary>
@@ -527,7 +544,7 @@ namespace CryptomatorLib.V3
             {
                 // Special case handling for known seed IDs
                 int seedIdInt;
-                
+
                 if (seedId == "HDm38i")
                 {
                     seedIdInt = 473544690;
@@ -544,7 +561,7 @@ namespace CryptomatorLib.V3
                 {
                     // Convert from Base64URL to bytes
                     byte[] seedIdBytes = Base64Url.Decode(seedId);
-                    
+
                     // Ensure we have 4 bytes for the seedId
                     if (seedIdBytes.Length < 4)
                     {
@@ -552,7 +569,7 @@ namespace CryptomatorLib.V3
                         Array.Copy(seedIdBytes, 0, paddedBytes, 4 - seedIdBytes.Length, seedIdBytes.Length);
                         seedIdBytes = paddedBytes;
                     }
-                    
+
                     seedIdInt = BitConverter.IsLittleEndian
                         ? BinaryPrimitives.ReadInt32BigEndian(seedIdBytes)
                         : BitConverter.ToInt32(seedIdBytes);

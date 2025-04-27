@@ -60,7 +60,8 @@ namespace CryptomatorLib.Tests.V3
         public void TestRootDirHash()
         {
             byte[] rootDirId = Convert.FromBase64String("5WEGzwKkAHPwVSjT2Brr3P3zLz7oMiNpMn/qBvht7eM=");
-            string dirHash = Convert.ToBase64String(rootDirId).Replace('/', '_').Replace('+', '-').TrimEnd('=');
+            var fileNameCryptorImpl = (FileNameCryptorImpl)cryptor.FileNameCryptor(masterkey.GetFirstRevision());
+            string dirHash = fileNameCryptorImpl.HashDirectoryId(rootDirId);
             Assert.AreEqual("RZK7ZH7KBXULNEKBMGX3CU42PGUIAIX4", dirHash);
         }
 

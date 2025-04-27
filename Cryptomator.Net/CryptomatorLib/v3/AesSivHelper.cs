@@ -1,6 +1,15 @@
 using System;
 using System.Security.Cryptography;
 using CryptomatorLib.Api; // Add this for InvalidCiphertextException
+using System.Diagnostics; // Added for Debug.WriteLine
+using System.Linq; // Added for LINQ
+using System.Text; // Added for Encoding
+// BouncyCastle Imports
+using Org.BouncyCastle.Crypto;
+using Org.BouncyCastle.Crypto.Engines;
+using Org.BouncyCastle.Crypto.Macs;
+using Org.BouncyCastle.Crypto.Paddings;
+using Org.BouncyCastle.Crypto.Parameters;
 
 namespace CryptomatorLib.V3
 {
@@ -21,6 +30,11 @@ namespace CryptomatorLib.V3
         /// <returns>The ciphertext (with SIV/Tag prepended)</returns>
         public static byte[] Encrypt(byte[] key, byte[] plaintext, byte[] ad)
         {
+            Debug.WriteLine("[AesSivHelper.Encrypt] Start");
+            Debug.WriteLine($"[AesSivHelper.Encrypt] Key: {Convert.ToBase64String(key)}");
+            Debug.WriteLine($"[AesSivHelper.Encrypt] Plaintext: {Convert.ToBase64String(plaintext)} ({Encoding.UTF8.GetString(plaintext)})");
+            Debug.WriteLine($"[AesSivHelper.Encrypt] AD: {(ad == null ? "null" : Convert.ToBase64String(ad))}");
+
             if (key == null || key.Length != 64)
             {
                 throw new ArgumentException("Key must be 64 bytes for AES-SIV-512", nameof(key));
@@ -36,9 +50,13 @@ namespace CryptomatorLib.V3
             byte[] k2 = new byte[32];
             Buffer.BlockCopy(key, 0, k1, 0, 32);
             Buffer.BlockCopy(key, 32, k2, 0, 32);
+            //Debug.WriteLine($"[AesSivHelper.Encrypt] K1 (MAC Key): {Convert.ToBase64String(k1)}");
+            //Debug.WriteLine($"[AesSivHelper.Encrypt] K2 (CTR Key): {Convert.ToBase64String(k2)}");
 
             // Step 1: Generate the SIV (Synthetic Initialization Vector) using S2V operation
+            //Debug.WriteLine("[AesSivHelper.Encrypt] Calculating S2V...");
             byte[] siv = S2V(k1, plaintext, ad != null ? new[] { ad } : Array.Empty<byte[]>());
+            //Debug.WriteLine($"[AesSivHelper.Encrypt] S2V Result (SIV/Tag): {Convert.ToBase64String(siv)}");
 
             // Step 2: Encrypt the plaintext using AES-CTR with modified SIV as counter
             byte[] modifiedSiv = new byte[BLOCK_SIZE];
@@ -46,15 +64,20 @@ namespace CryptomatorLib.V3
             // Clear the most significant bit in the last 32 bits (per RFC5297)
             modifiedSiv[8] &= 0x7F;
             modifiedSiv[12] &= 0x7F;
+            //Debug.WriteLine($"[AesSivHelper.Encrypt] Modified SIV (CTR Counter IV): {Convert.ToBase64String(modifiedSiv)}");
 
             // Encrypt the plaintext with AES-CTR
+            //Debug.WriteLine("[AesSivHelper.Encrypt] Encrypting with CTR...");
             byte[] ciphertext = EncryptWithCtr(k2, modifiedSiv, plaintext);
+            //Debug.WriteLine($"[AesSivHelper.Encrypt] CTR Ciphertext (before SIV prepended): {Convert.ToBase64String(ciphertext)}");
 
             // Combine SIV and ciphertext
             byte[] result = new byte[siv.Length + ciphertext.Length];
             Buffer.BlockCopy(siv, 0, result, 0, siv.Length);
             Buffer.BlockCopy(ciphertext, 0, result, siv.Length, ciphertext.Length);
 
+            //Debug.WriteLine($"[AesSivHelper.Encrypt] Final Result (SIV + CTR Ciphertext): {Convert.ToBase64String(result)}");
+            //Debug.WriteLine("[AesSivHelper.Encrypt] End");
             return result;
         }
 
@@ -64,45 +87,38 @@ namespace CryptomatorLib.V3
         /// </summary>
         private static byte[] S2V(byte[] key, byte[] plaintext, byte[][] associatedData)
         {
-            // Maximum permitted AD length is the block size in bits - 2
+            Debug.WriteLine("  [AesSivHelper.S2V] Start");
+            Debug.WriteLine($"  [AesSivHelper.S2V] K1 (MAC Key): {Convert.ToBase64String(key)}");
+            Debug.WriteLine($"  [AesSivHelper.S2V] Plaintext: {Convert.ToBase64String(plaintext)}");
+            Debug.WriteLine($"  [AesSivHelper.S2V] Associated Data Count: {associatedData.Length}");
+            for (int i = 0; i < associatedData.Length; i++)
+            {
+                Debug.WriteLine($"    [AesSivHelper.S2V] AD[{i}]: {(associatedData[i] == null ? "null" : Convert.ToBase64String(associatedData[i]))}");
+            }
+
             if (associatedData.Length > 126)
             {
                 throw new ArgumentException("too many Associated Data fields");
             }
 
-            // Initialize HMAC with the key (used as a replacement for CMac in Java)
-            using HMACSHA256 hmac = new HMACSHA256(key);
+            // Use BouncyCastle AES Engine and CMac
+            AesEngine aesEngine = new AesEngine();
+            CMac cmac = new CMac(aesEngine);
+            KeyParameter keyParam = new KeyParameter(key);
+            cmac.Init(keyParam);
 
             // D = AES-CMAC(K1, <zero>)
             byte[] zero = new byte[BLOCK_SIZE];
-            byte[] d = Mac(hmac, zero);
+            byte[] d = MacWithBouncyCastle(cmac, zero);
 
             // Process associated data if present
             foreach (byte[] s in associatedData)
             {
                 if (s != null && s.Length > 0)
                 {
-                    byte[] adMac = Mac(hmac, s);
-
-                    // Make sure the arrays are properly sized for XOR operation
-                    // The Dbl output and adMac should be the same length, but we ensure it here
-                    byte[] doubled = Dbl(d);
-                    if (doubled.Length != adMac.Length)
-                    {
-                        // Adjust sizes to match - we need the minimum of the two lengths
-                        int minLength = Math.Min(doubled.Length, adMac.Length);
-                        byte[] tmp1 = new byte[minLength];
-                        byte[] tmp2 = new byte[minLength];
-
-                        Buffer.BlockCopy(doubled, 0, tmp1, 0, Math.Min(doubled.Length, minLength));
-                        Buffer.BlockCopy(adMac, 0, tmp2, 0, Math.Min(adMac.Length, minLength));
-
-                        d = Xor(tmp1, tmp2);
-                    }
-                    else
-                    {
-                        d = Xor(doubled, adMac);
-                    }
+                    byte[] adMac = MacWithBouncyCastle(cmac, s);
+                    byte[] doubledD = Dbl(d);
+                    d = Xor(doubledD, adMac); // XOR requires same length, Mac always returns BLOCK_SIZE
                 }
             }
 
@@ -110,69 +126,47 @@ namespace CryptomatorLib.V3
             byte[] t;
             if (plaintext.Length >= BLOCK_SIZE)
             {
-                // Make sure d is not longer than BLOCK_SIZE 
-                byte[] adjustedD = d;
-                if (d.Length > BLOCK_SIZE)
-                {
-                    adjustedD = new byte[BLOCK_SIZE];
-                    Buffer.BlockCopy(d, 0, adjustedD, 0, BLOCK_SIZE);
-                }
-
-                t = XorEnd(plaintext, adjustedD);
+                t = XorEnd(plaintext, d);
             }
             else
             {
-                byte[] paddedPlaintext = Pad(plaintext);
-
-                // Make sure the arrays are properly sized for XOR operation
+                byte[] paddedPlaintext = PadWithBouncyCastle(plaintext);
                 byte[] doubledD = Dbl(d);
-                if (doubledD.Length != paddedPlaintext.Length)
-                {
-                    // Adjust sizes to match
-                    int minLength = Math.Min(doubledD.Length, paddedPlaintext.Length);
-                    byte[] tmp1 = new byte[minLength];
-                    byte[] tmp2 = new byte[minLength];
-
-                    Buffer.BlockCopy(doubledD, 0, tmp1, 0, Math.Min(doubledD.Length, minLength));
-                    Buffer.BlockCopy(paddedPlaintext, 0, tmp2, 0, Math.Min(paddedPlaintext.Length, minLength));
-
-                    t = Xor(tmp1, tmp2);
-                }
-                else
-                {
-                    t = Xor(doubledD, paddedPlaintext);
-                }
+                t = Xor(doubledD, paddedPlaintext); // XOR requires same length
             }
 
-            return Mac(hmac, t);
+            //byte[] finalMac = ComputeAesCmac(key, t); // Old manual CMAC
+            byte[] finalMac = MacWithBouncyCastle(cmac, t);
+            Debug.WriteLine("  [AesSivHelper.S2V] End");
+            return finalMac;
         }
 
         /// <summary>
-        /// Performs MAC operation - equivalent to mac() in Java implementation
+        /// Performs AES-CMAC using BouncyCastle
         /// </summary>
-        private static byte[] Mac(HMACSHA256 hmac, byte[] input)
+        private static byte[] MacWithBouncyCastle(IMac mac, byte[] input)
         {
-            // Since we're using HMACSHA256 instead of CMAC,
-            // output is 32 bytes instead of 16, so we truncate to match CMAC
-            byte[] fullResult = hmac.ComputeHash(input);
-            byte[] truncated = new byte[BLOCK_SIZE];
-            Buffer.BlockCopy(fullResult, 0, truncated, 0, BLOCK_SIZE);
-            return truncated;
-        }
-
-        /// <summary>
-        /// Pads the input according to ISO7816-4 - equivalent to pad() in Java implementation
-        /// First bit 1, following bits 0
-        /// </summary>
-        private static byte[] Pad(byte[] input)
-        {
-            byte[] result = new byte[BLOCK_SIZE];
-            Buffer.BlockCopy(input, 0, result, 0, input.Length);
-
-            // Add padding: first bit 1, following bits 0 (ISO7816-4)
-            result[input.Length] = 0x80;
-
+            mac.Reset(); // Reset MAC for new input
+            mac.BlockUpdate(input, 0, input.Length);
+            byte[] result = new byte[mac.GetMacSize()];
+            mac.DoFinal(result, 0);
             return result;
+        }
+
+        /// <summary>
+        /// Pads the input according to ISO7816-4 using BouncyCastle
+        /// </summary>
+        private static byte[] PadWithBouncyCastle(byte[] input)
+        {
+            if (input.Length >= BLOCK_SIZE) // Should not happen if called correctly from S2V
+            {
+                throw new ArgumentException("Input length must be less than block size for padding.");
+            }
+            byte[] padded = new byte[BLOCK_SIZE];
+            Buffer.BlockCopy(input, 0, padded, 0, input.Length);
+            IBlockCipherPadding padding = new ISO7816d4Padding();
+            padding.AddPadding(padded, input.Length);
+            return padded;
         }
 
         /// <summary>
@@ -255,6 +249,7 @@ namespace CryptomatorLib.V3
         {
             byte[] ciphertext = new byte[plaintext.Length];
 
+            // Could potentially use BC CTR mode here too, but standard AES should be fine
             using Aes aes = Aes.Create();
             aes.Key = key;
             aes.Mode = CipherMode.ECB;
@@ -305,9 +300,15 @@ namespace CryptomatorLib.V3
         /// <param name="key">The decryption key (must be 64 bytes for AES-SIV-512)</param>
         /// <param name="ciphertext">The ciphertext to decrypt (with SIV/Tag prepended)</param>
         /// <param name="ad">The associated data</param>
-        /// <returns>The plaintext</returns>
+        /// <returns>The decrypted plaintext</returns>
+        /// <exception cref="AuthenticationFailedException">If authentication fails</exception>
         public static byte[] Decrypt(byte[] key, byte[] ciphertext, byte[] ad)
         {
+            Debug.WriteLine("[AesSivHelper.Decrypt] Start");
+            Debug.WriteLine($"[AesSivHelper.Decrypt] Key: {Convert.ToBase64String(key)}");
+            Debug.WriteLine($"[AesSivHelper.Decrypt] Ciphertext (SIV + CTR): {Convert.ToBase64String(ciphertext)}");
+            Debug.WriteLine($"[AesSivHelper.Decrypt] AD: {(ad == null ? "null" : Convert.ToBase64String(ad))}");
+
             if (key == null || key.Length != 64)
             {
                 throw new ArgumentException("Key must be 64 bytes for AES-SIV-512", nameof(key));
@@ -315,54 +316,52 @@ namespace CryptomatorLib.V3
 
             if (ciphertext == null || ciphertext.Length < BLOCK_SIZE)
             {
-                throw new InvalidCiphertextException("Ciphertext too short");
+                throw new ArgumentException("Ciphertext must be at least block size (16 bytes)", nameof(ciphertext));
             }
 
-            // Split the key into two halves (K1 for CMAC, K2 for CTR decryption)
+            // Split the key into two halves
             byte[] k1 = new byte[32];
             byte[] k2 = new byte[32];
             Buffer.BlockCopy(key, 0, k1, 0, 32);
             Buffer.BlockCopy(key, 32, k2, 0, 32);
+            //Debug.WriteLine($"[AesSivHelper.Decrypt] K1 (MAC Key): {Convert.ToBase64String(k1)}");
+            //Debug.WriteLine($"[AesSivHelper.Decrypt] K2 (CTR Key): {Convert.ToBase64String(k2)}");
 
-            // Extract SIV and actual ciphertext
-            byte[] iv = new byte[BLOCK_SIZE];
+            // Extract SIV (first 16 bytes) and the actual ciphertext
+            byte[] siv = new byte[BLOCK_SIZE];
             byte[] actualCiphertext = new byte[ciphertext.Length - BLOCK_SIZE];
-            Buffer.BlockCopy(ciphertext, 0, iv, 0, BLOCK_SIZE);
+            Buffer.BlockCopy(ciphertext, 0, siv, 0, BLOCK_SIZE);
             Buffer.BlockCopy(ciphertext, BLOCK_SIZE, actualCiphertext, 0, actualCiphertext.Length);
+            //Debug.WriteLine($"[AesSivHelper.Decrypt] Extracted SIV (Tag): {Convert.ToBase64String(siv)}");
+            //Debug.WriteLine($"[AesSivHelper.Decrypt] Extracted CTR Ciphertext: {Convert.ToBase64String(actualCiphertext)}");
 
-            // Create modified SIV for decryption
+            // Step 1: Decrypt the ciphertext using AES-CTR with modified SIV as counter
             byte[] modifiedSiv = new byte[BLOCK_SIZE];
-            Buffer.BlockCopy(iv, 0, modifiedSiv, 0, BLOCK_SIZE);
-            // Clear the most significant bit in the last 32 bits (per RFC5297)
+            Buffer.BlockCopy(siv, 0, modifiedSiv, 0, BLOCK_SIZE);
+            // Clear the most significant bit in the last 32 bits
             modifiedSiv[8] &= 0x7F;
             modifiedSiv[12] &= 0x7F;
+            //Debug.WriteLine($"[AesSivHelper.Decrypt] Modified SIV (CTR Counter IV): {Convert.ToBase64String(modifiedSiv)}");
 
-            // Decrypt the ciphertext with AES-CTR
-            byte[] plaintext = EncryptWithCtr(k2, modifiedSiv, actualCiphertext); // CTR mode is symmetric
+            //Debug.WriteLine("[AesSivHelper.Decrypt] Decrypting with CTR...");
+            byte[] plaintext = EncryptWithCtr(k2, modifiedSiv, actualCiphertext); // CTR encryption is its own inverse
+            //Debug.WriteLine($"[AesSivHelper.Decrypt] CTR Plaintext: {Convert.ToBase64String(plaintext)} ({Encoding.UTF8.GetString(plaintext)})");
 
-            // Verify the SIV by regenerating it from the plaintext and AD
-            byte[] control = S2V(k1, plaintext, ad != null ? new[] { ad } : Array.Empty<byte[]>());
+            // Step 2: Recalculate SIV using S2V on the decrypted plaintext and associated data
+            //Debug.WriteLine("[AesSivHelper.Decrypt] Recalculating S2V for verification...");
+            byte[] calculatedSiv = S2V(k1, plaintext, ad != null ? new[] { ad } : Array.Empty<byte[]>());
+            //Debug.WriteLine($"[AesSivHelper.Decrypt] Recalculated S2V (Tag): {Convert.ToBase64String(calculatedSiv)}");
 
-            // Compare the SIVs to authenticate the data - time-constant comparison
-            if (control.Length != iv.Length)
+            // Step 3: Compare the original SIV with the recalculated SIV
+            if (!CryptographicOperations.FixedTimeEquals(siv, calculatedSiv))
             {
-                throw new CryptographicException("Authentication failed");
+                //Debug.WriteLine("[AesSivHelper.Decrypt] !!! Authentication Failed: SIV mismatch !!!");
+                throw new AuthenticationFailedException("Authentication failed");
             }
 
-            int diff = 0;
-            for (int i = 0; i < iv.Length; i++)
-            {
-                diff |= iv[i] ^ control[i];
-            }
-
-            if (diff == 0)
-            {
-                return plaintext;
-            }
-            else
-            {
-                throw new CryptographicException("Authentication failed");
-            }
+            //Debug.WriteLine("[AesSivHelper.Decrypt] Authentication Succeeded");
+            //Debug.WriteLine("[AesSivHelper.Decrypt] End");
+            return plaintext;
         }
     }
 }

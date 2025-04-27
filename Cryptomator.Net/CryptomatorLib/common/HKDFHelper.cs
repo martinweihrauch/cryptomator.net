@@ -1,5 +1,9 @@
 using System;
 using System.Security.Cryptography;
+using Org.BouncyCastle.Crypto;
+using Org.BouncyCastle.Crypto.Digests;
+using Org.BouncyCastle.Crypto.Generators;
+using Org.BouncyCastle.Crypto.Parameters;
 
 namespace CryptomatorLib.Common
 {
@@ -192,55 +196,22 @@ namespace CryptomatorLib.Common
         {
             if (ikm == null)
                 throw new ArgumentNullException(nameof(ikm));
+            if (length < 0)
+                throw new ArgumentOutOfRangeException(nameof(length), "Length must be non-negative");
 
-            // Use SHA-512 for extraction
+            byte[] result = new byte[length];
+            IDigest digest = new Sha512Digest();
+            var hkdf = new HkdfBytesGenerator(digest);
+
+            // Use empty arrays if salt or info are null, matching Bouncy Castle Java behavior
             byte[] usedSalt = salt ?? Array.Empty<byte>();
-            byte[] prk;
+            byte[] usedInfo = info ?? Array.Empty<byte>();
 
-            using (var hmac = new HMACSHA512(usedSalt))
-            {
-                prk = hmac.ComputeHash(ikm);
-            }
+            var parameters = new HkdfParameters(ikm, usedSalt, usedInfo);
+            hkdf.Init(parameters);
+            hkdf.GenerateBytes(result, 0, length);
 
-            try
-            {
-                // Use SHA-512 for expansion
-                using (var hmac = new HMACSHA512(prk))
-                {
-                    byte[] result = new byte[length];
-                    byte[] t = Array.Empty<byte>();
-                    byte[] tInput;
-                    int offset = 0;
-
-                    // Use context info if provided
-                    byte[] usedInfo = info ?? Array.Empty<byte>();
-
-                    for (int i = 1; offset < length; i++)
-                    {
-                        // T(i) = HMAC-Hash(PRK, T(i-1) | info | i)
-                        tInput = new byte[t.Length + usedInfo.Length + 1];
-                        if (t.Length > 0)
-                        {
-                            Buffer.BlockCopy(t, 0, tInput, 0, t.Length);
-                        }
-                        Buffer.BlockCopy(usedInfo, 0, tInput, t.Length, usedInfo.Length);
-                        tInput[tInput.Length - 1] = (byte)i;
-
-                        t = hmac.ComputeHash(tInput);
-
-                        // Copy to result
-                        int copyLen = Math.Min(length - offset, t.Length);
-                        Buffer.BlockCopy(t, 0, result, offset, copyLen);
-                        offset += copyLen;
-                    }
-
-                    return result;
-                }
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(prk);
-            }
+            return result;
         }
 
         /// <summary>
@@ -248,8 +219,16 @@ namespace CryptomatorLib.Common
         /// </summary>
         public static void HkdfSha256(byte[]? salt, byte[] ikm, byte[] output, byte[] info)
         {
-            byte[] result = HkdfSha256(salt, ikm, info, output.Length);
-            Buffer.BlockCopy(result, 0, output, 0, output.Length);
+            if (ikm == null)
+                throw new ArgumentNullException(nameof(ikm));
+            if (output == null)
+                throw new ArgumentNullException(nameof(output));
+            if (info == null)
+                throw new ArgumentNullException(nameof(info));
+
+            byte[] derived = HkdfSha256(salt, ikm, info, output.Length);
+            Buffer.BlockCopy(derived, 0, output, 0, output.Length);
+            CryptographicOperations.ZeroMemory(derived);
         }
     }
 }

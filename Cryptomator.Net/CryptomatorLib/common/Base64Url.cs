@@ -21,10 +21,9 @@ namespace CryptomatorLib.Common
 
             return Convert.ToBase64String(data)
                 .Replace('+', '-')
-                .Replace('/', '_')
-                .TrimEnd('=');
+                .Replace('/', '_');
         }
-        
+
         /// <summary>
         /// Decodes a Base64URL string to binary data.
         /// </summary>
@@ -38,17 +37,17 @@ namespace CryptomatorLib.Common
             string padded = base64Url
                 .Replace('-', '+')
                 .Replace('_', '/');
-                
+
             // Add padding if needed
             switch (padded.Length % 4)
             {
                 case 2: padded += "=="; break;
                 case 3: padded += "="; break;
             }
-            
+
             return Convert.FromBase64String(padded);
         }
-        
+
         /// <summary>
         /// Decodes a Base64URL string to an UTF-8 string.
         /// </summary>
@@ -59,7 +58,7 @@ namespace CryptomatorLib.Common
             byte[] bytes = Decode(base64Url);
             return Encoding.UTF8.GetString(bytes);
         }
-        
+
         /// <summary>
         /// Encodes a UTF-8 string to a Base64URL string.
         /// </summary>
@@ -69,9 +68,9 @@ namespace CryptomatorLib.Common
         {
             if (text == null)
                 throw new ArgumentNullException(nameof(text));
-                
+
             byte[] bytes = Encoding.UTF8.GetBytes(text);
             return Encode(bytes);
         }
     }
-} 
+}

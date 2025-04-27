@@ -5,6 +5,8 @@ using CryptomatorLib.V3;
 using System;
 using System.Security.Cryptography;
 using System.Collections.Generic;
+using System.Diagnostics;
+using CryptomatorLib.Tests.Common;
 
 namespace CryptomatorLib.Tests.V3
 {
@@ -18,7 +20,8 @@ namespace CryptomatorLib.Tests.V3
         [ClassInitialize]
         public static void SetUp(TestContext context)
         {
-            CSPRNG = RandomNumberGenerator.Create();
+            // Use deterministic RNG for tests
+            CSPRNG = SecureRandomMock.NULL_RANDOM;
 
             // Setup masterkey with the same test data as in Java tests
             string json = "{\n" +
@@ -65,7 +68,9 @@ namespace CryptomatorLib.Tests.V3
         {
             DirectoryMetadata rootDirMetadata = dirCryptor.RootDirectoryMetadata();
             IDirectoryContentCryptor.Encrypting enc = dirCryptor.FileNameEncryptor(rootDirMetadata);
+
             string ciphertext = enc.Encrypt("WELCOME.rtf");
+
             Assert.AreEqual("Dx1binBPsg_KNby6KFD_2k3vZHPgo39rg4ks.uvf", ciphertext);
         }
 
@@ -75,7 +80,9 @@ namespace CryptomatorLib.Tests.V3
         {
             DirectoryMetadata rootDirMetadata = dirCryptor.RootDirectoryMetadata();
             IDirectoryContentCryptor.Decrypting dec = dirCryptor.FileNameDecryptor(rootDirMetadata);
+
             string plaintext = dec.Decrypt("Dx1binBPsg_KNby6KFD_2k3vZHPgo39rg4ks.uvf");
+
             Assert.AreEqual("WELCOME.rtf", plaintext);
         }
 
@@ -84,11 +91,14 @@ namespace CryptomatorLib.Tests.V3
         public void TestRootDirPath()
         {
             DirectoryMetadata rootDirMetadata = dirCryptor.RootDirectoryMetadata();
+
             string path = dirCryptor.DirPath(rootDirMetadata);
+
             Assert.AreEqual("d/RZ/K7ZH7KBXULNEKBMGX3CU42PGUIAIX4", path);
         }
 
         [TestClass]
+        [TestCategory("WithDirectoryMetadata")]
         public class WithDirectoryMetadata
         {
             private DirectoryMetadataImpl dirUvf;
@@ -98,6 +108,17 @@ namespace CryptomatorLib.Tests.V3
             [TestInitialize]
             public void Setup()
             {
+                // Add null checks for debugging
+                if (DirectoryContentCryptorImplTest.masterkey == null)
+                {
+                    throw new InvalidOperationException("Outer class masterkey is null in nested Setup");
+                }
+                if (DirectoryContentCryptorImplTest.dirCryptor == null)
+                {
+                    throw new InvalidOperationException("Outer class dirCryptor is null in nested Setup");
+                }
+
+                // Create an empty directory ID as in Java test
                 dirUvf = new DirectoryMetadataImpl(DirectoryContentCryptorImplTest.masterkey.GetCurrentRevision(), new byte[32]);
                 enc = DirectoryContentCryptorImplTest.dirCryptor.FileNameEncryptor(dirUvf);
                 dec = DirectoryContentCryptorImplTest.dirCryptor.FileNameDecryptor(dirUvf);
@@ -109,9 +130,10 @@ namespace CryptomatorLib.Tests.V3
             [DataRow("file3.txt", "dunZsv8VRuh81R-u6pioPx2DWeQAU0nLfw==.uvf")]
             [DataRow("file4.txt", "2-clI661p9TBSzC2IJjvBF3ehaKas5Vqxg==.uvf")]
             [DisplayName("Encrypt multiple file names")]
-            public void TestBulkEncryption(string plaintext, string ciphertext)
+            public void TestBulkEncryption(string plaintext, string expectedCiphertext)
             {
-                Assert.AreEqual(ciphertext, enc.Encrypt(plaintext));
+                string actualCiphertext = enc.Encrypt(plaintext);
+                Assert.AreEqual(expectedCiphertext, actualCiphertext);
             }
 
             [DataTestMethod]
@@ -120,9 +142,10 @@ namespace CryptomatorLib.Tests.V3
             [DataRow("file3.txt", "dunZsv8VRuh81R-u6pioPx2DWeQAU0nLfw==.uvf")]
             [DataRow("file4.txt", "2-clI661p9TBSzC2IJjvBF3ehaKas5Vqxg==.uvf")]
             [DisplayName("Decrypt multiple file names")]
-            public void TestBulkDecryption(string plaintext, string ciphertext)
+            public void TestBulkDecryption(string expectedPlaintext, string ciphertext)
             {
-                Assert.AreEqual(plaintext, dec.Decrypt(ciphertext));
+                string actualPlaintext = dec.Decrypt(ciphertext);
+                Assert.AreEqual(expectedPlaintext, actualPlaintext);
             }
 
             [TestMethod]
@@ -149,8 +172,13 @@ namespace CryptomatorLib.Tests.V3
             [DisplayName("Decrypt file with incorrect seed")]
             public void TestDecryptMalformed3()
             {
-                DirectoryMetadataImpl differentRevision = new DirectoryMetadataImpl(DirectoryContentCryptorImplTest.masterkey.GetFirstRevision(), new byte[32]);
-                IDirectoryContentCryptor.Decrypting differentRevisionDec = DirectoryContentCryptorImplTest.dirCryptor.FileNameDecryptor(differentRevision);
+                DirectoryMetadataImpl differentRevision = new DirectoryMetadataImpl(
+                    DirectoryContentCryptorImplTest.masterkey.GetFirstRevision(),
+                    new byte[32]);
+
+                IDirectoryContentCryptor.Decrypting differentRevisionDec =
+                    DirectoryContentCryptorImplTest.dirCryptor.FileNameDecryptor(differentRevision);
+
                 Assert.ThrowsException<AuthenticationFailedException>(() =>
                 {
                     differentRevisionDec.Decrypt("NIWamUJBS3u619f3yKOWlT2q_raURsHXhg==.uvf");
@@ -161,8 +189,16 @@ namespace CryptomatorLib.Tests.V3
             [DisplayName("Decrypt file with incorrect dirId")]
             public void TestDecryptMalformed4()
             {
-                DirectoryMetadataImpl differentDirId = new DirectoryMetadataImpl(DirectoryContentCryptorImplTest.masterkey.GetFirstRevision(), new byte[] { 0xDE, 0xAD });
-                IDirectoryContentCryptor.Decrypting differentDirIdDec = DirectoryContentCryptorImplTest.dirCryptor.FileNameDecryptor(differentDirId);
+                // Create a different directory ID same as the Java test
+                byte[] differentDirId = new byte[] { 0xDE, 0x0A, 0xD };
+
+                DirectoryMetadataImpl differentDirIdMetadata = new DirectoryMetadataImpl(
+                    DirectoryContentCryptorImplTest.masterkey.GetFirstRevision(),
+                    differentDirId);
+
+                IDirectoryContentCryptor.Decrypting differentDirIdDec =
+                    DirectoryContentCryptorImplTest.dirCryptor.FileNameDecryptor(differentDirIdMetadata);
+
                 Assert.ThrowsException<AuthenticationFailedException>(() =>
                 {
                     differentDirIdDec.Decrypt("NIWamUJBS3u619f3yKOWlT2q_raURsHXhg==.uvf");

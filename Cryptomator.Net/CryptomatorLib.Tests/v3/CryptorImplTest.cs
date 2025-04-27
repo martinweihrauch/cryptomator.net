@@ -2,8 +2,6 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using CryptomatorLib.Api;
 using CryptomatorLib.Tests.Common;
 using CryptomatorLib.V3;
-using System;
-using System.Collections.Generic;
 using System.Security.Cryptography;
 using Moq;
 
@@ -35,10 +33,8 @@ namespace CryptomatorLib.Tests.V3
         public void TestGetFileContentCryptor()
         {
             Assert.IsNotNull(_masterkey, "Masterkey should be initialized");
-            using (var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK))
-            {
-                Assert.IsInstanceOfType(cryptor.FileContentCryptor(), typeof(FileContentCryptorImpl));
-            }
+            using var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK);
+            Assert.IsInstanceOfType(cryptor.FileContentCryptor(), typeof(FileContentCryptorImpl));
         }
 
         [TestMethod]
@@ -46,10 +42,8 @@ namespace CryptomatorLib.Tests.V3
         public void TestGetFileHeaderCryptor()
         {
             Assert.IsNotNull(_masterkey, "Masterkey should be initialized");
-            using (var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK))
-            {
-                Assert.IsInstanceOfType(cryptor.FileHeaderCryptor(), typeof(FileHeaderCryptorImpl));
-            }
+            using var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK);
+            Assert.IsInstanceOfType(cryptor.FileHeaderCryptor(), typeof(FileHeaderCryptorImpl));
         }
 
         [TestMethod]
@@ -57,10 +51,8 @@ namespace CryptomatorLib.Tests.V3
         public void TestGetFileNameCryptor()
         {
             Assert.IsNotNull(_masterkey, "Masterkey should be initialized");
-            using (var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK))
-            {
-                Assert.ThrowsException<NotSupportedException>(() => cryptor.FileNameCryptor());
-            }
+            using var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK);
+            Assert.ThrowsException<NotSupportedException>(() => cryptor.FileNameCryptor());
         }
 
         [TestMethod]
@@ -68,10 +60,8 @@ namespace CryptomatorLib.Tests.V3
         public void TestGetFileNameCryptorWithInvalidRevisions()
         {
             Assert.IsNotNull(_masterkey, "Masterkey should be initialized");
-            using (var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK))
-            {
-                Assert.ThrowsException<ArgumentException>(() => cryptor.FileNameCryptor(0xBAD5EED));
-            }
+            using var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK);
+            Assert.ThrowsException<ArgumentException>(() => cryptor.FileNameCryptor(0xBAD5EED));
         }
 
         [TestMethod]
@@ -79,10 +69,8 @@ namespace CryptomatorLib.Tests.V3
         public void TestGetFileNameCryptorWithCorrectRevisions()
         {
             Assert.IsNotNull(_masterkey, "Masterkey should be initialized");
-            using (var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK))
-            {
-                Assert.IsInstanceOfType(cryptor.FileNameCryptor(-1540072521), typeof(FileNameCryptorImpl));
-            }
+            using var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK);
+            Assert.IsInstanceOfType(cryptor.FileNameCryptor(-1540072521), typeof(FileNameCryptorImpl));
         }
 
         [TestMethod]
@@ -90,11 +78,9 @@ namespace CryptomatorLib.Tests.V3
         public void TestDirectoryContentCryptor()
         {
             Assert.IsNotNull(_masterkey, "Masterkey should be initialized");
-            using (var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK))
-            {
-                // Since DirectoryContentCryptor is not implemented yet, expect NotImplementedException
-                Assert.ThrowsException<NotImplementedException>(() => cryptor.DirectoryContentCryptor());
-            }
+            using var cryptor = new CryptorImpl(_masterkey, RANDOM_MOCK);
+            // Since DirectoryContentCryptor is implemented, we should get a valid instance
+            Assert.IsInstanceOfType(cryptor.DirectoryContentCryptor(), typeof(DirectoryContentCryptorImpl));
         }
 
         [TestMethod]
@@ -104,20 +90,18 @@ namespace CryptomatorLib.Tests.V3
             // Create a mock UVFMasterkey
             var masterkeyMock = new Mock<UVFMasterkey>();
 
-            using (var cryptor = new CryptorImpl(masterkeyMock.Object, RANDOM_MOCK))
-            {
-                // Call destroy
-                cryptor.Destroy();
+            using var cryptor = new CryptorImpl(masterkeyMock.Object, RANDOM_MOCK);
+            // Call destroy
+            cryptor.Destroy();
 
-                // Verify destroy was called on the masterkey
-                masterkeyMock.Verify(m => m.Destroy(), Times.Once);
+            // Verify destroy was called on the masterkey
+            masterkeyMock.Verify(m => m.Destroy(), Times.Once);
 
-                // Setup the mock to report it's destroyed
-                masterkeyMock.Setup(m => m.IsDestroyed()).Returns(true);
+            // Setup the mock to report it's destroyed
+            masterkeyMock.Setup(m => m.IsDestroyed()).Returns(true);
 
-                // Check that the cryptor reports it's destroyed
-                Assert.IsTrue(cryptor.IsDestroyed());
-            }
+            // Check that the cryptor reports it's destroyed
+            Assert.IsTrue(cryptor.IsDestroyed());
         }
 
         [TestMethod]

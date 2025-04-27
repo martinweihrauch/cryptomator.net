@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using CryptomatorLib.Api;
 using CryptomatorLib.Common;
+using System.Diagnostics;
 
 namespace CryptomatorLib.V3
 {
@@ -88,16 +89,26 @@ namespace CryptomatorLib.V3
             if (dirId == null)
                 throw new ArgumentNullException(nameof(dirId));
 
+            byte[] hmacKeyBytes = _hmacKey.GetRaw();
+            Debug.WriteLine($"C# HashDirectoryId - HMAC Key (B64): {Convert.ToBase64String(hmacKeyBytes)}");
+            Debug.WriteLine($"C# HashDirectoryId - Input dirId (B64): {Convert.ToBase64String(dirId)}");
+
             // Use HMAC-SHA256 for hashing with the HMAC key derived from the master key
-            using var hmac = new HMACSHA256(_hmacKey.GetRaw());
+            using var hmac = new HMACSHA256(hmacKeyBytes);
             byte[] hash = hmac.ComputeHash(dirId);
+            Debug.WriteLine($"C# HashDirectoryId - Full HMAC (B64): {Convert.ToBase64String(hash)}");
 
             // Only use the first 20 bytes (160 bits) for compatibility with Java implementation
             byte[] truncatedHash = new byte[20];
             Array.Copy(hash, truncatedHash, 20);
+            Debug.WriteLine($"C# HashDirectoryId - Truncated HMAC (B64): {Convert.ToBase64String(truncatedHash)}");
 
             // Convert to uppercase Base32 string
-            return Base32Encoding.ToString(truncatedHash).ToUpperInvariant();
+            string base32Hash = Base32Encoding.ToString(truncatedHash);
+            Debug.WriteLine($"C# HashDirectoryId - Base32 Result (Before ToUpper): {base32Hash}");
+            string finalResult = base32Hash.ToUpperInvariant();
+            Debug.WriteLine($"C# HashDirectoryId - Final Result: {finalResult}");
+            return finalResult;
         }
 
         /// <summary>
@@ -144,8 +155,10 @@ namespace CryptomatorLib.V3
             // Use dirId as associated authenticated data
             byte[] encryptedBytes = AesSivHelper.Encrypt(_sivKey.GetRaw(), cleartextBytes, dirId);
 
-            // Use the existing Base64Url.Encode method
-            return CryptomatorLib.Common.Base64Url.Encode(encryptedBytes) + Constants.UVF_FILE_EXT;
+            // Use the existing Base64Url.Encode method and append .uvf extension
+            string base64UrlEncoded = CryptomatorLib.Common.Base64Url.Encode(encryptedBytes);
+            string finalCiphertext = base64UrlEncoded + Constants.UVF_FILE_EXT;
+            return finalCiphertext;
         }
 
         /// <summary>
@@ -173,14 +186,19 @@ namespace CryptomatorLib.V3
 
             string ciphertextWithoutExt = ciphertextName.Substring(0, ciphertextName.Length - Constants.UVF_FILE_EXT.Length);
 
-            // Use the existing Base64Url.Decode method
-            byte[] encryptedBytes = CryptomatorLib.Common.Base64Url.Decode(ciphertextWithoutExt);
-
             try
             {
+                // Use the existing Base64Url.Decode method
+                byte[] encryptedBytes = CryptomatorLib.Common.Base64Url.Decode(ciphertextWithoutExt);
+
                 // Decrypt using AES-SIV with dirId as associated data
                 byte[] decryptedBytes = AesSivHelper.Decrypt(_sivKey.GetRaw(), encryptedBytes, dirId);
-                return Encoding.UTF8.GetString(decryptedBytes);
+                string plaintext = Encoding.UTF8.GetString(decryptedBytes);
+                return plaintext;
+            }
+            catch (FormatException ex)
+            {
+                throw new InvalidCiphertextException("Invalid Base64 encoding", ex);
             }
             catch (CryptographicException ex)
             {

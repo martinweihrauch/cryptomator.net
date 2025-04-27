@@ -195,11 +195,13 @@ namespace CryptomatorLib.Tests.V3
             [DisplayName("Test Decrypt With Authentication Disabled")]
             public void TestDecryptWithAuthenticationDisabled()
             {
-                // GCM requires authentication, so this should throw
+                // GCM requires authentication, so this should throw UnsupportedOperationException
                 ReadOnlyMemory<byte> ciphertext = new Memory<byte>(new byte[CommonConstants.CHUNK_SIZE]);
+                Memory<byte> cleartextBuffer = new Memory<byte>(new byte[_fileContentCryptor.CleartextChunkSize()]);
 
-                Assert.ThrowsException<ArgumentException>(() =>
-                    _fileContentCryptor.DecryptChunk(ciphertext, 0, _header, false));
+                // Change expected exception type to UnsupportedOperationException
+                Assert.ThrowsException<UnsupportedOperationException>(() =>
+                    _fileContentCryptor.DecryptChunk(ciphertext, cleartextBuffer, 0, _header, false));
             }
 
             [TestMethod]

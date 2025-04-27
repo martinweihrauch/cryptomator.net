@@ -60,7 +60,7 @@ namespace CryptomatorLib.V3
             {
                 throw new ArgumentException($"Masterkey does not have revision {revision}", nameof(revision));
             }
-            return new FileNameCryptorImpl(_masterkey, _random);
+            return new FileNameCryptorImpl(_masterkey, _random, revision);
         }
 
         /// <inheritdoc/>

@@ -12,6 +12,7 @@ import javax.crypto.Mac;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.util.Arrays;
+import java.util.Formatter;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -146,14 +147,29 @@ public class Scrypt {
 
 		System.arraycopy(B, Bi, XY, Xi, 128 * r);
 
+		System.out.printf("Java ROMix Start: N=%d, r=%d%n", N, r);
+		System.out.printf("Java ROMix XY start: %s%n", bytesToHex(XY, 16, Xi));
+
 		for (i = 0; i < N; i++) {
+			if (i % (N/4 == 0 ? 1 : N/4) == 0 || i == N-1) System.out.printf("Java ROMix V Loop i=%d%n", i);
 			System.arraycopy(XY, Xi, V, i * (128 * r), 128 * r);
 			blockmixSalsa8(XY, Xi, Yi, r);
 		}
+		System.out.printf("Java ROMix XY after V loop: %s%n", bytesToHex(XY, 16, Xi));
 
 		for (i = 0; i < N; i++) {
 			int j = integerify(XY, Xi, r) & (N - 1);
+
+			if (i % (N/4 == 0 ? 1 : N/4) == 0 || i == N-1) {
+			    System.out.printf("-- Java ROMix Mix Loop i=%d, Xi=%d, j=%d --%n", i, Xi, j);
+                System.out.printf("   XY before XOR: %s%n", bytesToHex(XY, 16, Xi));
+                System.out.printf("    V[j*offset]: %s%n", bytesToHex(V, 16, j * (128 * r)));
+            }
+
 			blockxor(V, j * (128 * r), XY, Xi, 128 * r);
+
+            if (i % (N/4 == 0 ? 1 : N/4) == 0 || i == N-1) System.out.printf("    XY after XOR: %s%n", bytesToHex(XY, 16, Xi));
+
 			blockmixSalsa8(XY, Xi, Yi, r);
 		}
 
@@ -262,6 +278,18 @@ public class Scrypt {
 		n |= (B[Bi + 3] & 0xff) << 24;
 
 		return n;
+	}
+
+	private static String bytesToHex(byte[] bytes, int count, int offset) {
+		if (bytes == null) return "null";
+		StringBuilder sb = new StringBuilder(count * 2);
+		Formatter formatter = new Formatter(sb);
+		int end = Math.min(offset + count, bytes.length);
+		for (int i = offset; i < end; i++) {
+			formatter.format("%02x", bytes[i]);
+		}
+		formatter.close();
+		return sb.toString();
 	}
 
 }
