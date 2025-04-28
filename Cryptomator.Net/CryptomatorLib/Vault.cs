@@ -1,3 +1,14 @@
+/*******************************************************************************
+ * Copyright (c) 2016 Sebastian Stenzel and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the accompanying LICENSE.txt.
+ *
+ * Contributors:
+ *     Sebastian Stenzel - initial API and implementation
+ *******************************************************************************/
+
+// Copyright (c) Smart In Venture GmbH 2025 of the C# Porting
+
 using System;
 using System.IO;
 using System.Security.Cryptography;
@@ -35,13 +46,14 @@ namespace CryptomatorLib
         /// Creates the encrypted master key file content for a new vault.
         /// </summary>
         /// <param name="password">The password for the new vault.</param>
+        /// <param name="pepper">Optional pepper to use during key derivation. If null, an empty pepper is used.</param>
         /// <returns>A byte array containing the encrypted master key file data.</returns>
         /// <exception cref="ArgumentNullException">If password is null.</exception>
         /// <exception cref="CryptoException">If key generation or encryption fails.</exception>
-        public static byte[] CreateNewVaultKeyFileContent(string password)
+        public static byte[] CreateNewVaultKeyFileContent(string password, byte[]? pepper = null)
         {
             // Delegate to VaultKeyHelper
-            return VaultKeyHelper.CreateNewVaultKeyFileContentInternal(password);
+            return VaultKeyHelper.CreateNewVaultKeyFileContentInternal(password, pepper);
         }
 
 
@@ -51,6 +63,7 @@ namespace CryptomatorLib
         /// </summary>
         /// <param name="encryptedKeyFileContent">The byte content of the master key file.</param>
         /// <param name="password">The vault password.</param>
+        /// <param name="pepper">Optional pepper to use during key derivation. If null, an empty pepper is used.</param>
         /// <returns>An initialized Vault instance ready for operations.</returns>
         /// <exception cref="ArgumentNullException">If key content or password is null.</exception>
         /// <exception cref="InvalidPassphraseException">If the password is incorrect.</exception>
@@ -58,26 +71,43 @@ namespace CryptomatorLib
         /// <exception cref="UnsupportedVaultFormatException">If the vault format is not supported.</exception>
         /// <exception cref="MasterkeyLoadingFailedException">For other key loading errors.</exception>
         /// <exception cref="CryptoException">For general cryptographic errors.</exception>
-        public static Vault Load(byte[] encryptedKeyFileContent, string password)
+        public static Vault Load(byte[] encryptedKeyFileContent, string password, byte[]? pepper = null)
         {
             if (encryptedKeyFileContent == null) throw new ArgumentNullException(nameof(encryptedKeyFileContent));
             if (password == null) throw new ArgumentNullException(nameof(password)); // Check password early
+            byte[] effectivePepper = pepper ?? Array.Empty<byte>(); // Use provided pepper or default empty
 
             // 1. Parse the masterkey file content
             MasterkeyFile masterkeyFile = MasterkeyFile.FromJson(encryptedKeyFileContent);
 
-            // 2. Unlock the masterkey using the password
-            // MasterkeyFileAccess needs pepper and RNG - how to get/manage pepper?
-            // For now, create a temporary instance with default pepper/rng for unlocking.
-            // This might need refinement depending on how pepper is intended to be used.
-            // Assuming a default/null pepper is acceptable for standard vault operations.
-            var keyAccessor = new MasterkeyFileAccess(new byte[0], CsPrng); // TODO: Review pepper usage
+            // 2. Unlock the masterkey using the password and pepper
+            var keyAccessor = new MasterkeyFileAccess(effectivePepper, CsPrng);
             PerpetualMasterkey masterkey = keyAccessor.Unlock(masterkeyFile, password);
 
             // 3. Get the appropriate CryptorProvider based on the master key format
-            // Assuming UVF V3 format for now based on PerpetualMasterkey
-            // Ideally, the masterkey or masterkeyFile should indicate the scheme/version.
-            CryptorProvider provider = CryptorProvider.ForScheme(CryptorProvider.Scheme.UVF_DRAFT); // TODO: Determine scheme dynamically
+            CryptorProvider.Scheme scheme;
+            // Check VaultVersion first, assuming 8+ uses UVF format
+            // TODO: Refine this logic if older non-UVF schemes are supported by PerpetualMasterkey
+            if (masterkeyFile.VaultVersion >= 8)
+            {
+                scheme = CryptorProvider.Scheme.UVF_DRAFT;
+            }
+            else
+            {
+                // Attempt to map older schemes based on properties if possible
+                // Example (needs verification based on actual V6/V7 masterkey files):
+                // if (masterkeyFile.ContentEncryptionScheme == "AES-GCM" && ...) scheme = CryptorProvider.Scheme.SIV_GCM;
+                // else if (...) scheme = CryptorProvider.Scheme.SIV_CTRMAC;
+                // else ...
+
+                // Use the correct constructor for the exception
+                var dummyUri = new Uri("file://masterkey.cryptomator"); // Placeholder URI
+                var detectedFormat = VaultFormat.Unknown; // Or try to map version
+                string errorMessage = $"Unsupported vault version ({masterkeyFile.VaultVersion}) or unable to determine scheme.";
+                throw new UnsupportedVaultFormatException(dummyUri, detectedFormat, errorMessage);
+            }
+
+            CryptorProvider provider = CryptorProvider.ForScheme(scheme);
 
             // 4. Get the specific Cryptor implementation using the provider and masterkey
             Cryptor cryptor = provider.Provide(masterkey, CsPrng);
@@ -93,14 +123,15 @@ namespace CryptomatorLib
         /// <param name="encryptedKeyFileContent">The current byte content of the master key file.</param>
         /// <param name="oldPassword">The current vault password.</param>
         /// <param name="newPassword">The desired new vault password.</param>
+        /// <param name="pepper">Optional pepper to use during key derivation. If null, an empty pepper is used.</param>
         /// <returns>A byte array containing the newly encrypted master key file data.</returns>
         /// <exception cref="ArgumentNullException">If key content or passwords are null.</exception>
         /// <exception cref="InvalidPassphraseException">If the oldPassword is incorrect.</exception>
         // ... other exceptions from Load and Save ...
-        public static byte[] ChangeVaultPassword(byte[] encryptedKeyFileContent, string oldPassword, string newPassword)
+        public static byte[] ChangeVaultPassword(byte[] encryptedKeyFileContent, string oldPassword, string newPassword, byte[]? pepper = null)
         {
             // Delegate to VaultKeyHelper
-            return VaultKeyHelper.ChangeVaultPasswordInternal(encryptedKeyFileContent, oldPassword, newPassword);
+            return VaultKeyHelper.ChangeVaultPasswordInternal(encryptedKeyFileContent, oldPassword, newPassword, pepper);
         }
 
 
@@ -161,6 +192,18 @@ namespace CryptomatorLib
         }
 
         /// <summary>
+        /// Gets the DirectoryMetadata for the vault's root directory.
+        /// </summary>
+        /// <returns>The DirectoryMetadata for the root.</returns>
+        /// <exception cref="InvalidOperationException">If the vault is not initialized correctly.</exception>
+        public DirectoryMetadata GetRootDirectoryMetadata()
+        {
+            var dirCryptor = _cryptor.DirectoryContentCryptor();
+            if (dirCryptor == null) throw new InvalidOperationException("Directory cryptor not available.");
+            return dirCryptor.RootDirectoryMetadata();
+        }
+
+        /// <summary>
         /// Returns a Stream that encrypts data as it is written to the underlying output stream.
         /// Handles file header creation and chunk encryption automatically.
         /// </summary>
@@ -191,7 +234,6 @@ namespace CryptomatorLib
         public Stream GetDecryptingStream(Stream inputStream, bool leaveOpen = false)
         {
             // Delegate to VaultStreamHelper
-            // Note: Need to update VaultStreamHelper to use DecryptingStream
             return VaultStreamHelper.GetDecryptingStreamInternal(_cryptor, inputStream, leaveOpen);
         }
 

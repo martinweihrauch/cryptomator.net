@@ -10,7 +10,7 @@ namespace CryptomatorLib.V3
     /// <summary>
     /// Implementation of the FileNameCryptor interface for v3 format.
     /// </summary>
-    internal sealed class FileNameCryptorImpl : FileNameCryptor
+    public sealed class FileNameCryptorImpl : FileNameCryptor
     {
         private static readonly byte[] SIV_KDF_CONTEXT = Encoding.ASCII.GetBytes("siv");
         private static readonly byte[] HMAC_KDF_CONTEXT = Encoding.ASCII.GetBytes("hmac");
@@ -28,7 +28,7 @@ namespace CryptomatorLib.V3
         /// <param name="masterkey">The revolving masterkey</param>
         /// <param name="random">The random number generator</param>
         /// <param name="seedId">The seed ID to use</param>
-        internal FileNameCryptorImpl(RevolvingMasterkey masterkey, RandomNumberGenerator random, int seedId)
+        public FileNameCryptorImpl(RevolvingMasterkey masterkey, RandomNumberGenerator random, int seedId)
         {
             _masterkey = masterkey ?? throw new ArgumentNullException(nameof(masterkey));
             _random = random ?? throw new ArgumentNullException(nameof(random));
@@ -44,7 +44,7 @@ namespace CryptomatorLib.V3
         /// </summary>
         /// <param name="masterkey">The revolving masterkey</param>
         /// <param name="random">The random number generator</param>
-        internal FileNameCryptorImpl(RevolvingMasterkey masterkey, RandomNumberGenerator random)
+        public FileNameCryptorImpl(RevolvingMasterkey masterkey, RandomNumberGenerator random)
             : this(masterkey, random, masterkey.GetCurrentRevision())
         {
         }

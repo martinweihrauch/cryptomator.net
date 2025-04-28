@@ -5,15 +5,16 @@ using BenchmarkDotNet.Order;
 using CryptomatorLib.Api;
 using CryptomatorLib.Common;
 
-namespace CryptomatorLib.Tests.Benchmarks
+// Adjust namespace
+namespace CryptomatorLib.Benchmarks
 {
     [MemoryDiagnoser]
     [Orderer(SummaryOrderPolicy.FastestToSlowest)]
     public class EncryptionBenchmarks
     {
-        private byte[] _sampleData;
-        private byte[] _key;
-        private byte[] _iv;
+        private byte[]? _sampleData;
+        private byte[]? _key;
+        private byte[]? _iv;
 
         [GlobalSetup]
         public void Setup()
@@ -32,6 +33,7 @@ namespace CryptomatorLib.Tests.Benchmarks
         [Benchmark]
         public byte[] AesGcmEncryption()
         {
+            if (_sampleData == null || _key == null || _iv == null) throw new InvalidOperationException("Setup failed");
             // Use the library's encryption method
             return AesGcmCryptor.Encrypt(_sampleData, _key, _iv);
         }
@@ -39,6 +41,7 @@ namespace CryptomatorLib.Tests.Benchmarks
         [Benchmark]
         public byte[] AesCtrEncryption()
         {
+            if (_sampleData == null || _key == null || _iv == null) throw new InvalidOperationException("Setup failed");
             // Use the library's encryption method
             return AesCtrCryptor.Encrypt(_sampleData, _key, _iv);
         }

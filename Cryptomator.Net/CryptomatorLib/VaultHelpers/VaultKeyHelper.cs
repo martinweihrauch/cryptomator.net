@@ -1,9 +1,18 @@
-using System;
+/*******************************************************************************
+ * Copyright (c) 2016 Sebastian Stenzel and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the accompanying LICENSE.txt.
+ *
+ * Contributors:
+ *     Sebastian Stenzel - initial API and implementation
+ *******************************************************************************/
+
+// Copyright (c) Smart In Venture GmbH 2025 of the C# Porting
+
+
 using System.Security.Cryptography;
-using System.Text;
 using CryptomatorLib.Api;
 using CryptomatorLib.Common; // For MasterkeyFileAccess, MasterkeyFile, CryptographicOperations
-using CryptomatorLib.V3; // For PerpetualMasterkey
 
 namespace CryptomatorLib.VaultHelpers
 {
@@ -24,9 +33,10 @@ namespace CryptomatorLib.VaultHelpers
         /// <summary>
         /// Creates the encrypted master key file content for a new vault.
         /// </summary>
-        public static byte[] CreateNewVaultKeyFileContentInternal(string password)
+        public static byte[] CreateNewVaultKeyFileContentInternal(string password, byte[]? pepper)
         {
             if (string.IsNullOrEmpty(password)) throw new ArgumentNullException(nameof(password));
+            byte[] effectivePepper = pepper ?? Array.Empty<byte>(); // Use provided pepper or default empty
 
             PerpetualMasterkey? masterkey = null;
             byte[]? rawKeyBytes = null; // Declare outside try for finally block access
@@ -39,9 +49,8 @@ namespace CryptomatorLib.VaultHelpers
                 masterkey = new PerpetualMasterkey(rawKeyBytes);
                 // Raw key bytes are copied internally by PerpetualMasterkey constructor
 
-                // 2. Create MasterkeyFileAccess instance
-                // Using empty pepper for now, consistent with Vault.Load
-                var keyAccessor = new MasterkeyFileAccess(new byte[0], CsPrng); // TODO: Review pepper usage
+                // 2. Create MasterkeyFileAccess instance using effective pepper
+                var keyAccessor = new MasterkeyFileAccess(effectivePepper, CsPrng);
 
                 // 3. Lock the key with the password to create the MasterkeyFile structure
                 // Provide default Scrypt parameters - Lock signature needs costParam
@@ -69,19 +78,22 @@ namespace CryptomatorLib.VaultHelpers
         /// <summary>
         /// Changes the password for an existing vault's master key file content.
         /// </summary>
-        public static byte[] ChangeVaultPasswordInternal(byte[] encryptedKeyFileContent, string oldPassword, string newPassword)
+        public static byte[] ChangeVaultPasswordInternal(byte[] encryptedKeyFileContent, string oldPassword, string newPassword, byte[]? pepper)
         {
             if (encryptedKeyFileContent == null) throw new ArgumentNullException(nameof(encryptedKeyFileContent));
             if (string.IsNullOrEmpty(oldPassword)) throw new ArgumentNullException(nameof(oldPassword));
             if (string.IsNullOrEmpty(newPassword)) throw new ArgumentNullException(nameof(newPassword));
+            byte[] effectivePepper = pepper ?? Array.Empty<byte>(); // Use provided pepper or default empty
 
-            // 1. Create MasterkeyFileAccess instance
-            var keyAccessor = new MasterkeyFileAccess(new byte[0], CsPrng); // TODO: Review pepper usage
+            // 1. Create MasterkeyFileAccess instance using effective pepper
+            var keyAccessor = new MasterkeyFileAccess(effectivePepper, CsPrng);
 
             // 2. Parse the existing content
             MasterkeyFile masterkeyFile = MasterkeyFile.FromJson(encryptedKeyFileContent);
 
             // 3. Use the ChangePassphrase method (which internally unlocks with old, locks with new)
+            // ChangePassphrase itself needs pepper for the Unlock and Lock steps internally
+            // Assuming MasterkeyFileAccess uses its instance pepper for this.
             MasterkeyFile updatedMasterkeyFile = keyAccessor.ChangePassphrase(masterkeyFile, oldPassword, newPassword);
 
             // 4. Serialize the updated MasterkeyFile to JSON bytes

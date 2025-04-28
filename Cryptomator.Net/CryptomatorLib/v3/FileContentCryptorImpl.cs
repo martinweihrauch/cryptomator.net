@@ -10,7 +10,7 @@ namespace CryptomatorLib.V3
     /// <summary>
     /// Implementation of the FileContentCryptor interface for v3 format.
     /// </summary>
-    internal sealed class FileContentCryptorImpl : FileContentCryptor
+    public sealed class FileContentCryptorImpl : FileContentCryptor
     {
         private readonly RandomNumberGenerator _random;
         private readonly RevolvingMasterkey _revolvingMasterkey;
@@ -20,7 +20,7 @@ namespace CryptomatorLib.V3
         /// </summary>
         /// <param name="revolvingMasterkey">The revolving masterkey</param>
         /// <param name="random">The random number generator</param>
-        internal FileContentCryptorImpl(RevolvingMasterkey revolvingMasterkey, RandomNumberGenerator random)
+        public FileContentCryptorImpl(RevolvingMasterkey revolvingMasterkey, RandomNumberGenerator random)
         {
             _revolvingMasterkey = revolvingMasterkey ?? throw new ArgumentNullException(nameof(revolvingMasterkey));
             _random = random ?? throw new ArgumentNullException(nameof(random));

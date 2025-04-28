@@ -9,7 +9,7 @@ namespace CryptomatorLib.V3
     /// <summary>
     /// Implementation of the FileHeaderCryptor interface for v3 format.
     /// </summary>
-    internal sealed class FileHeaderCryptorImpl : FileHeaderCryptor
+    public sealed class FileHeaderCryptorImpl : FileHeaderCryptor
     {
         private static readonly byte[] KDF_CONTEXT = System.Text.Encoding.ASCII.GetBytes("fileHeader");
 
@@ -23,7 +23,7 @@ namespace CryptomatorLib.V3
         /// <param name="masterkey">The masterkey</param>
         /// <param name="random">The random number generator</param>
         /// <param name="revision">The revision of the masterkey to use</param>
-        internal FileHeaderCryptorImpl(RevolvingMasterkey masterkey, RandomNumberGenerator random, int revision)
+        public FileHeaderCryptorImpl(RevolvingMasterkey masterkey, RandomNumberGenerator random, int revision)
         {
             _masterkey = masterkey ?? throw new ArgumentNullException(nameof(masterkey));
             _random = random ?? throw new ArgumentNullException(nameof(random));
