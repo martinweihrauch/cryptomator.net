@@ -29,25 +29,37 @@ namespace CryptomatorLib.Common
         {
             try
             {
-                // Create a self-signed certificate with the key pair
                 var certParams = new CertificateRequest(
                     new X500DistinguishedName(X509_SUBJECT),
                     keyPair,
                     GetHashAlgorithmName(signatureAlg));
 
-                // Set issuer
+                // Add Basic Constraints Extension (Not CA, non-critical)
                 certParams.CertificateExtensions.Add(
-                    new X509BasicConstraintsExtension(false, false, 0, true));
+                    new X509BasicConstraintsExtension(false, false, 0, false));
 
-                var cert = certParams.CreateSelfSigned(
+                // Add a default Key Usage extension (e.g., for signing/encryption)
+                certParams.CertificateExtensions.Add(
+                    new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
+
+                // Create the self-signed certificate
+                using var cert = certParams.CreateSelfSigned(
                     DateTimeOffset.Now.AddDays(-1),
                     DateTimeOffset.Now.AddDays(X509_VALID_DAYS));
 
-                // Export to PKCS#12 format
-                var pfxData = cert.Export(X509ContentType.Pfx, new string(passphrase));
+                // Assign a friendly name
+                cert.FriendlyName = KEYSTORE_ALIAS_CERT;
+
+                // Create a collection and add the certificate
+                var collection = new X509Certificate2Collection();
+                collection.Add(cert);
+
+                // Export the collection to PKCS#12 format
+                var pfxData = collection.Export(X509ContentType.Pfx, new string(passphrase));
 
                 // Write to the output stream
                 output.Write(pfxData, 0, pfxData.Length);
+                output.Flush();
             }
             catch (Exception ex)
             {

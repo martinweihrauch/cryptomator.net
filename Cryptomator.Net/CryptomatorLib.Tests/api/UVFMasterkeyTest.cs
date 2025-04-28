@@ -150,7 +150,7 @@ namespace CryptomatorLib.Tests.Api
                 using (DestroyableSecretKey subkey = masterkeyImpl.SubKey(-1540072521, 32, Encoding.ASCII.GetBytes("fileHeader"), "AES"))
                 {
                     // Remove '=' padding for the comparison since we expect URL-safe Base64 
-                    string actual = Convert.ToBase64String(subkey.GetRaw()).TrimEnd('=');
+                    string actual = Convert.ToBase64String(subkey.GetEncoded()).TrimEnd('=');
                     string expected = SUBKEY_RESULT_B64.TrimEnd('=');
                     Assert.AreEqual(expected, actual);
                 }

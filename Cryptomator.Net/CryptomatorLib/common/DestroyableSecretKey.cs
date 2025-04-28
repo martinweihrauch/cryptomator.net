@@ -4,177 +4,93 @@ using System.Security.Cryptography;
 namespace CryptomatorLib.Common
 {
     /// <summary>
-    /// A secret key that can be destroyed. Once destroyed, the key material is zeroed out and no longer available.
+    /// Represents a secret key whose material can be securely destroyed.
+    /// Similar to javax.security.auth.Destroyable and Java's DestroyableSecretKey.
     /// </summary>
     public sealed class DestroyableSecretKey : IDisposable
     {
-        private readonly byte[] _key;
-        private readonly string _algorithm;
+        private byte[] _keyMaterial;
         private bool _destroyed;
+        private readonly string _algorithm; // Optional: Store algorithm like Java
 
         /// <summary>
-        /// Creates a new destroyable secret key, copying the provided raw key bytes.
+        /// Gets the algorithm name associated with this key.
         /// </summary>
-        /// <param name="key">The raw key material (will be copied)</param>
-        /// <param name="algorithm">The algorithm name</param>
-        public DestroyableSecretKey(byte[] key, string algorithm)
-        {
-            if (key == null) throw new ArgumentNullException(nameof(key));
-            if (string.IsNullOrEmpty(algorithm)) throw new ArgumentNullException(nameof(algorithm));
+        public string Algorithm => _algorithm;
 
-            _key = new byte[key.Length];
-            Buffer.BlockCopy(key, 0, _key, 0, key.Length);
-            _algorithm = algorithm;
+        /// <summary>
+        /// Checks if the key has been destroyed.
+        /// </summary>
+        public bool IsDestroyed => _destroyed;
+
+        /// <summary>
+        /// Creates a new DestroyableSecretKey by copying the provided key material.
+        /// </summary>
+        /// <param name="keyMaterial">The secret key bytes.</param>
+        /// <param name="algorithm">The algorithm name (e.g., "AES", "HmacSHA256").</param>
+        public DestroyableSecretKey(byte[] keyMaterial, string algorithm)
+        {
+            if (keyMaterial == null) throw new ArgumentNullException(nameof(keyMaterial));
+            _keyMaterial = new byte[keyMaterial.Length];
+            Buffer.BlockCopy(keyMaterial, 0, _keyMaterial, 0, keyMaterial.Length);
+            _algorithm = algorithm ?? string.Empty;
             _destroyed = false;
         }
 
         /// <summary>
-        /// Creates a new destroyable secret key, copying part of the provided raw key bytes.
+        /// Creates a new DestroyableSecretKey by copying a portion of the provided key material.
         /// </summary>
-        /// <param name="key">The raw key material (relevant part will be copied)</param>
-        /// <param name="offset">The offset within the key where the key starts</param>
-        /// <param name="len">The number of bytes to read from the key</param>
-        /// <param name="algorithm">The algorithm name</param>
-        public DestroyableSecretKey(byte[] key, int offset, int len, string algorithm)
+        /// <param name="keyMaterial">The source byte array.</param>
+        /// <param name="offset">The starting offset in the source array.</param>
+        /// <param name="length">The number of bytes to copy.</param>
+        /// <param name="algorithm">The algorithm name.</param>
+        public DestroyableSecretKey(byte[] keyMaterial, int offset, int length, string algorithm)
         {
-            if (key == null) throw new ArgumentNullException(nameof(key));
-            if (offset < 0) throw new ArgumentException("Invalid offset", nameof(offset));
-            if (len < 0) throw new ArgumentException("Invalid length", nameof(len));
-            if (key.Length < offset + len) throw new ArgumentException("Invalid offset/len");
-            if (string.IsNullOrEmpty(algorithm)) throw new ArgumentNullException(nameof(algorithm));
+            if (keyMaterial == null) throw new ArgumentNullException(nameof(keyMaterial));
+            if (offset < 0 || length < 0 || offset + length > keyMaterial.Length)
+                throw new ArgumentOutOfRangeException("Invalid offset or length.");
 
-            _key = new byte[len];
-            Buffer.BlockCopy(key, offset, _key, 0, len);
-            _algorithm = algorithm;
+            _keyMaterial = new byte[length];
+            Buffer.BlockCopy(keyMaterial, offset, _keyMaterial, 0, length);
+            _algorithm = algorithm ?? string.Empty;
             _destroyed = false;
         }
 
         /// <summary>
-        /// Creates a new key of given length and for use with given algorithm using entropy from the given random number generator.
+        /// Returns a copy of the key material.
         /// </summary>
-        /// <param name="rng">A cryptographically secure random number source</param>
-        /// <param name="algorithm">The key algorithm</param>
-        /// <param name="keyLenBytes">The length of the key (in bytes)</param>
-        /// <returns>A new secret key</returns>
-        public static DestroyableSecretKey Generate(RandomNumberGenerator rng, string algorithm, int keyLenBytes)
-        {
-            if (rng == null) throw new ArgumentNullException(nameof(rng));
-            if (string.IsNullOrEmpty(algorithm)) throw new ArgumentNullException(nameof(algorithm));
-            if (keyLenBytes <= 0) throw new ArgumentException("Key length must be positive", nameof(keyLenBytes));
-
-            byte[] key = new byte[keyLenBytes];
-            try
-            {
-                rng.GetBytes(key);
-                return new DestroyableSecretKey(key, algorithm);
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(key);
-            }
-        }
-
-        /// <summary>
-        /// Gets the algorithm name.
-        /// </summary>
-        public string Algorithm
-        {
-            get
-            {
-                ThrowIfDestroyed();
-                return _algorithm;
-            }
-        }
-
-        /// <summary>
-        /// Gets the key format.
-        /// </summary>
-        public string Format
-        {
-            get
-            {
-                ThrowIfDestroyed();
-                return "RAW";
-            }
-        }
-
-        /// <summary>
-        /// Gets the raw key bytes. WARNING: This returns a direct reference to the internal key buffer.
-        /// Any changes to the returned array will affect this key. Make sure to create a copy if you can't rule out mutations.
-        /// </summary>
-        /// <returns>The raw key material</returns>
-        public byte[] GetRaw()
-        {
-            ThrowIfDestroyed();
-            return _key;
-        }
-
-        /// <summary>
-        /// Gets the raw key bytes. WARNING: This returns a direct reference to the internal key buffer.
-        /// Any changes to the returned array will affect this key. Make sure to create a copy if you can't rule out mutations.
-        /// </summary>
-        /// <returns>The raw key material</returns>
-        [Obsolete("Use GetRaw() instead")]
+        /// <returns>A copy of the key bytes.</returns>
+        /// <exception cref="InvalidOperationException">If the key has been destroyed.</exception>
         public byte[] GetEncoded()
         {
-            return GetRaw();
+            if (_destroyed)
+            {
+                throw new InvalidOperationException("Key has been destroyed.");
+            }
+            // Return a copy to prevent external modification of the internal array
+            byte[] copy = new byte[_keyMaterial.Length];
+            Buffer.BlockCopy(_keyMaterial, 0, copy, 0, _keyMaterial.Length);
+            return copy;
         }
 
         /// <summary>
-        /// Gets the key bytes. Same as GetRaw() but provided for backward compatibility.
-        /// </summary>
-        /// <returns>The key bytes</returns>
-        public byte[] GetKeyBytes()
-        {
-            return GetRaw();
-        }
-
-        /// <summary>
-        /// Creates a new independent copy of this key.
-        /// </summary>
-        /// <returns>A new copy of this key</returns>
-        public DestroyableSecretKey Copy()
-        {
-            ThrowIfDestroyed();
-            return new DestroyableSecretKey(_key, _algorithm);
-        }
-
-        /// <summary>
-        /// Securely destroys the key material.
+        /// Securely destroys the key material by overwriting it with zeroes.
         /// </summary>
         public void Destroy()
         {
             if (!_destroyed)
             {
-                CryptographicOperations.ZeroMemory(_key);
+                CryptographicOperations.ZeroMemory(_keyMaterial);
                 _destroyed = true;
             }
         }
 
         /// <summary>
-        /// Checks if the key has been destroyed.
-        /// </summary>
-        /// <returns>True if the key has been destroyed, false otherwise</returns>
-        public bool IsDestroyed()
-        {
-            return _destroyed;
-        }
-
-        /// <summary>
-        /// Disposes the key, calling Destroy().
+        /// Disposes the key by calling Destroy().
         /// </summary>
         public void Dispose()
         {
             Destroy();
-            GC.SuppressFinalize(this);
-        }
-
-        private void ThrowIfDestroyed()
-        {
-            if (_destroyed)
-            {
-                throw new InvalidOperationException("Key has been destroyed");
-            }
         }
     }
 }

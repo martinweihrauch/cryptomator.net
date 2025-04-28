@@ -3,7 +3,8 @@ using System;
 namespace CryptomatorLib.Api
 {
     /// <summary>
-    /// A secret key that can be destroyed. Once destroyed, the key material is zeroed out and no longer available.
+    /// Represents a master key, providing access to raw key material and destroy capability.
+    /// (Original structure before refactoring attempt)
     /// </summary>
     public interface Masterkey : IDisposable
     {
@@ -22,6 +23,6 @@ namespace CryptomatorLib.Api
         /// Checks if the key has been destroyed.
         /// </summary>
         /// <returns>True if the key has been destroyed, false otherwise</returns>
-        bool IsDestroyed();
+        bool IsDestroyed(); // Method, not property
     }
-} 
+}

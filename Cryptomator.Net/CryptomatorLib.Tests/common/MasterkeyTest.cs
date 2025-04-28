@@ -1,129 +1,162 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using CryptomatorLib.Common;
+using CryptomatorLib.Api; // Use the Api namespace for interfaces if needed
 using System;
-using System.Text;
 using System.Security.Cryptography;
-using CryptomatorLib.Tests.Common.TestUtilities;
+using Moq; // Add Moq for mocking CSPRNG if needed for Generate test
+using System.Linq; // Add Linq for checking zeroed array
 
 namespace CryptomatorLib.Tests.Common
 {
     [TestClass]
     public class MasterkeyTest
     {
-        [TestMethod]
-        [DisplayName("Test Create Masterkey")]
-        public void TestCreateMasterkey()
+        // Qualify Masterkey to CryptomatorLib.Common.Masterkey to resolve ambiguity
+        private const int SubkeyLength = CryptomatorLib.Common.Masterkey.SubkeyLength;
+        // Qualify Masterkey to CryptomatorLib.Common.Masterkey to resolve ambiguity
+        private const int KeyLength = CryptomatorLib.Common.Masterkey.KeyLength;
+
+        // Helper to create a deterministic mock RNG for testing Generate
+        private static RandomNumberGenerator CreateMockRng(byte[] outputBytes)
         {
-            // Create a new masterkey
-            using (var masterkey = Masterkey.CreateNew())
+            var mockRng = new Mock<RandomNumberGenerator>();
+            mockRng.Setup(rng => rng.GetBytes(It.Is<byte[]>(b => b.Length == outputBytes.Length)))
+                   .Callback<byte[]>(buffer => Buffer.BlockCopy(outputBytes, 0, buffer, 0, outputBytes.Length));
+            // Add setup for other lengths if needed, maybe throw?
+            mockRng.Setup(rng => rng.GetBytes(It.Is<byte[]>(b => b.Length != outputBytes.Length)))
+                   .Throws(new ArgumentException("Mock RNG only configured for specific length"));
+            return mockRng.Object;
+        }
+
+        [TestMethod]
+        [DisplayName("Test Generate Creates Valid Masterkey")]
+        public void TestGenerate()
+        {
+            byte[] expectedKeyMaterial = new byte[KeyLength];
+            for (int i = 0; i < KeyLength; i++) expectedKeyMaterial[i] = (byte)i; // Example deterministic bytes
+
+            var mockRng = CreateMockRng(expectedKeyMaterial);
+
+            // Qualify Masterkey type
+            using (var masterkey = CryptomatorLib.Common.Masterkey.Generate(mockRng))
             {
-                // Verify the masterkey has a valid raw key
-                Assert.IsNotNull(masterkey.RawKey);
-                Assert.AreEqual(Masterkey.KeyLength, masterkey.RawKey.Length);
+                Assert.IsNotNull(masterkey);
+                Assert.IsFalse(masterkey.IsDestroyed());
+                // Verify the internal key material using GetRaw (which returns a copy)
+                CollectionAssert.AreEqual(expectedKeyMaterial, masterkey.GetRaw());
             }
+            // Verify mock was called (optional)
+            // Mock.Get(mockRng).Verify(rng => rng.GetBytes(It.Is<byte[]>(b => b.Length == KeyLength)), Times.Once);
         }
 
         [TestMethod]
-        [DisplayName("Test Create From Raw Key")]
-        public void TestCreateFromRawKey()
+        [DisplayName("Test From Creates Valid Masterkey From Subkeys")]
+        public void TestFrom()
         {
-            // Create a random key
-            byte[] keyBytes = new byte[Masterkey.KeyLength];
-            new SecureRandom().NextBytes(keyBytes);
+            byte[] encKeyBytes = Enumerable.Range(0, SubkeyLength).Select(i => (byte)0x55).ToArray();
+            byte[] macKeyBytes = Enumerable.Range(0, SubkeyLength).Select(i => (byte)0x77).ToArray();
+            byte[] expectedCombined = encKeyBytes.Concat(macKeyBytes).ToArray();
 
-            // Create a masterkey from the raw key
-            using (var masterkey = Masterkey.CreateFromRaw(keyBytes))
+            using (var encKey = new DestroyableSecretKey(encKeyBytes, "AES")) // Use correct C# class
+            using (var macKey = new DestroyableSecretKey(macKeyBytes, "HmacSHA256")) // Use correct C# class
+            // Qualify Masterkey type
+            using (var masterkey = CryptomatorLib.Common.Masterkey.From(encKey, macKey)) // Use static From method
             {
-                // Verify the raw key was set correctly
-                CollectionAssert.AreEqual(keyBytes, masterkey.RawKey);
-            }
-        }
+                Assert.IsNotNull(masterkey);
+                Assert.IsFalse(masterkey.IsDestroyed());
+                CollectionAssert.AreEqual(expectedCombined, masterkey.GetRaw());
 
-        [TestMethod]
-        [DisplayName("Test Create From Raw Key With Invalid Length")]
-        public void TestCreateFromRawKeyWithInvalidLength()
-        {
-            // Create a key with invalid length
-            byte[] keyBytes = new byte[Masterkey.KeyLength - 1]; // Too short
-
-            // Attempt to create a masterkey with the invalid key
-            Assert.ThrowsException<ArgumentException>(() =>
-                Masterkey.CreateFromRaw(keyBytes));
-        }
-
-        [TestMethod]
-        [DisplayName("Test Encrypt And Decrypt Masterkey")]
-        public void TestEncryptAndDecryptMasterkey()
-        {
-            // Create a passphrase for encryption
-            string passphrase = "test-passphrase";
-
-            // Create a masterkey
-            using (var originalMasterkey = Masterkey.CreateNew())
-            {
-                // Encrypt the masterkey to create a masterkey file
-                MasterkeyFile masterkeyFile = originalMasterkey.CreateMasterkeyFile(passphrase);
-
-                // Verify the masterkey file contains the expected encrypted data
-                Assert.IsNotNull(masterkeyFile.ScryptSalt);
-                Assert.IsNotNull(masterkeyFile.PrimaryMasterkey);
-                Assert.IsNotNull(masterkeyFile.PrimaryMasterkeyNonce);
-
-                // Decrypt the masterkey from the file
-                using (var decryptedMasterkey = Masterkey.DecryptMasterkey(masterkeyFile, passphrase))
+                // Optional: Verify subkeys match
+                using (var derivedEncKey = masterkey.GetEncKey())
+                using (var derivedMacKey = masterkey.GetMacKey())
                 {
-                    // Verify the decrypted masterkey matches the original
-                    CollectionAssert.AreEqual(originalMasterkey.RawKey, decryptedMasterkey.RawKey);
+                    CollectionAssert.AreEqual(encKeyBytes, derivedEncKey.GetEncoded());
+                    CollectionAssert.AreEqual(macKeyBytes, derivedMacKey.GetEncoded());
                 }
             }
+            // Clear temp arrays for safety (though From should handle its inputs securely)
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(encKeyBytes); // Qualify
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(macKeyBytes); // Qualify
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(expectedCombined); // Qualify
         }
 
         [TestMethod]
-        [DisplayName("Test Decrypt With Wrong Passphrase")]
-        public void TestDecryptWithWrongPassphrase()
+        [DisplayName("Test GetEncKey Returns Correct Subkey")]
+        public void TestGetEncKey()
         {
-            // Create a masterkey and encrypt it
-            using (var originalMasterkey = Masterkey.CreateNew())
+            byte[] rawKey = new byte[KeyLength];
+            for (int i = 0; i < KeyLength; i++) rawKey[i] = (byte)i;
+            byte[] expectedEncKey = rawKey.Take(SubkeyLength).ToArray();
+
+            // Need to create Masterkey instance first, e.g., using From or Generate
+            // Simplest might be to use internal knowledge for test setup or use From
+            using (var encK = new DestroyableSecretKey(expectedEncKey, "AES"))
+            using (var macK = new DestroyableSecretKey(rawKey.Skip(SubkeyLength).ToArray(), "HMAC"))
+            // Qualify Masterkey type
+            using (var masterkey = CryptomatorLib.Common.Masterkey.From(encK, macK))
+            using (var derivedEncKey = masterkey.GetEncKey())
             {
-                MasterkeyFile masterkeyFile = originalMasterkey.CreateMasterkeyFile("correct-passphrase");
-
-                // Attempt to decrypt with wrong passphrase
-                Assert.ThrowsException<InvalidCredentialException>(() =>
-                    Masterkey.DecryptMasterkey(masterkeyFile, "wrong-passphrase"));
+                Assert.IsNotNull(derivedEncKey);
+                CollectionAssert.AreEqual(expectedEncKey, derivedEncKey.GetEncoded());
+                Assert.AreEqual("AES", derivedEncKey.Algorithm); // Check algorithm if set by GetEncKey
             }
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(rawKey); // Qualify
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(expectedEncKey); // Qualify
         }
 
         [TestMethod]
-        [DisplayName("Test Destroy Masterkey")]
-        public void TestDestroyMasterkey()
+        [DisplayName("Test GetMacKey Returns Correct Subkey")]
+        public void TestGetMacKey()
         {
-            // Create a masterkey
-            var masterkey = Masterkey.CreateNew();
+            byte[] rawKey = new byte[KeyLength];
+            for (int i = 0; i < KeyLength; i++) rawKey[i] = (byte)i;
+            byte[] expectedMacKey = rawKey.Skip(SubkeyLength).ToArray();
 
-            // Get a copy of the raw key for verification
-            byte[] rawKeyCopy = new byte[masterkey.RawKey.Length];
-            Array.Copy(masterkey.RawKey, rawKeyCopy, rawKeyCopy.Length);
+            using (var encK = new DestroyableSecretKey(rawKey.Take(SubkeyLength).ToArray(), "AES"))
+            using (var macK = new DestroyableSecretKey(expectedMacKey, "HmacSHA256"))
+            // Qualify Masterkey type
+            using (var masterkey = CryptomatorLib.Common.Masterkey.From(encK, macK))
+            using (var derivedMacKey = masterkey.GetMacKey())
+            {
+                Assert.IsNotNull(derivedMacKey);
+                CollectionAssert.AreEqual(expectedMacKey, derivedMacKey.GetEncoded());
+                Assert.AreEqual("HmacSHA256", derivedMacKey.Algorithm); // Check algorithm if set by GetMacKey
+            }
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(rawKey); // Qualify
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(expectedMacKey); // Qualify
+        }
 
-            // Destroy the masterkey
+        [TestMethod]
+        [DisplayName("Test Destroy Zeros Key and Sets Flag")]
+        public void TestDestroy()
+        {
+            // Qualify Masterkey type
+            CryptomatorLib.Common.Masterkey masterkey = CryptomatorLib.Common.Masterkey.Generate(); // Don't dispose immediately
+            byte[] rawKeyCopy = masterkey.GetRaw(); // Get copy before destroy
+
             masterkey.Destroy();
 
-            // Verify the raw key has been zeroed out
-            for (int i = 0; i < masterkey.RawKey.Length; i++)
-            {
-                Assert.AreEqual(0, masterkey.RawKey[i]);
-            }
+            Assert.IsTrue(masterkey.IsDestroyed(), "IsDestroyed() should return true after Destroy()");
 
-            // Verify our copy still has non-zero values (sanity check)
-            bool allZeroes = true;
-            for (int i = 0; i < rawKeyCopy.Length; i++)
-            {
-                if (rawKeyCopy[i] != 0)
-                {
-                    allZeroes = false;
-                    break;
-                }
-            }
-            Assert.IsFalse(allZeroes, "Original key data should not be all zeroes");
+            // Verify accessing via GetRaw throws after destroy
+            Assert.ThrowsException<InvalidOperationException>(() => masterkey.GetRaw(), "GetRaw() should throw after Destroy()");
+            Assert.ThrowsException<InvalidOperationException>(() => masterkey.GetEncKey(), "GetEncKey() should throw after Destroy()");
+            Assert.ThrowsException<InvalidOperationException>(() => masterkey.GetMacKey(), "GetMacKey() should throw after Destroy()");
+
+
+            // Check that the original copy is not zeroed
+            Assert.IsTrue(rawKeyCopy.Any(b => b != 0), "External copy of raw key should not be zeroed by Destroy()");
+
+            // Optional: verify internal state (if possible without reflection, maybe by effect)
+            // For example, trying to use it in 'From' might fail differently if zeroed vs destroyed flag? Difficult to test internal state reliably.
+
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(rawKeyCopy); // Qualify
+            masterkey.Dispose(); // Now dispose
         }
+
+        // REMOVED TestRootDirId - No Java equivalent
+
+        // REMOVED: Original TestCreateMasterkey, TestCreateFromRawKey, TestCreateFromRawKeyWithInvalidLength, TestEncryptAndDecryptMasterkey, TestDecryptWithWrongPassphrase
+        // NOTE: Equality/HashCode tests might need adaptation depending on Masterkey's implementation (if it overrides Equals/GetHashCode) - Java test has them, C# doesn't currently.
     }
 }

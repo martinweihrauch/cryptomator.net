@@ -72,7 +72,7 @@ namespace CryptomatorLib.Tests.Common
             _factory.Verify(f => f(), Times.AtLeast(1));
         }
 
-        private class Foo
+        public class Foo
         {
         }
     }

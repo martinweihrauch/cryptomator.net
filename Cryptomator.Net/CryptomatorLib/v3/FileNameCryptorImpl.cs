@@ -89,7 +89,7 @@ namespace CryptomatorLib.V3
             if (dirId == null)
                 throw new ArgumentNullException(nameof(dirId));
 
-            byte[] hmacKeyBytes = _hmacKey.GetRaw();
+            byte[] hmacKeyBytes = _hmacKey.GetEncoded();
             Debug.WriteLine($"C# HashDirectoryId - HMAC Key (B64): {Convert.ToBase64String(hmacKeyBytes)}");
             Debug.WriteLine($"C# HashDirectoryId - Input dirId (B64): {Convert.ToBase64String(dirId)}");
 
@@ -127,7 +127,7 @@ namespace CryptomatorLib.V3
             byte[] associatedData = Array.Empty<byte>();
 
             // For AES-SIV encryption
-            byte[] encryptedBytes = AesSivHelper.Encrypt(_sivKey.GetRaw(), cleartextBytes, associatedData);
+            byte[] encryptedBytes = AesSivHelper.Encrypt(_sivKey.GetEncoded(), cleartextBytes, associatedData);
 
             // Use the existing Base64Url.Encode method
             return CryptomatorLib.Common.Base64Url.Encode(encryptedBytes);
@@ -153,7 +153,7 @@ namespace CryptomatorLib.V3
             byte[] cleartextBytes = Encoding.UTF8.GetBytes(cleartextName);
 
             // Use dirId as associated authenticated data
-            byte[] encryptedBytes = AesSivHelper.Encrypt(_sivKey.GetRaw(), cleartextBytes, dirId);
+            byte[] encryptedBytes = AesSivHelper.Encrypt(_sivKey.GetEncoded(), cleartextBytes, dirId);
 
             // Use the existing Base64Url.Encode method and append .uvf extension
             string base64UrlEncoded = CryptomatorLib.Common.Base64Url.Encode(encryptedBytes);
@@ -192,7 +192,7 @@ namespace CryptomatorLib.V3
                 byte[] encryptedBytes = CryptomatorLib.Common.Base64Url.Decode(ciphertextWithoutExt);
 
                 // Decrypt using AES-SIV with dirId as associated data
-                byte[] decryptedBytes = AesSivHelper.Decrypt(_sivKey.GetRaw(), encryptedBytes, dirId);
+                byte[] decryptedBytes = AesSivHelper.Decrypt(_sivKey.GetEncoded(), encryptedBytes, dirId);
                 string plaintext = Encoding.UTF8.GetString(decryptedBytes);
                 return plaintext;
             }
@@ -224,7 +224,7 @@ namespace CryptomatorLib.V3
                 byte[] encryptedBytes = CryptomatorLib.Common.Base64Url.Decode(ciphertextName);
 
                 // Decrypt using AES-SIV with no associated data
-                byte[] decryptedBytes = AesSivHelper.Decrypt(_sivKey.GetRaw(), encryptedBytes, Array.Empty<byte>());
+                byte[] decryptedBytes = AesSivHelper.Decrypt(_sivKey.GetEncoded(), encryptedBytes, Array.Empty<byte>());
                 return Encoding.UTF8.GetString(decryptedBytes);
             }
             catch (FormatException ex)

@@ -69,7 +69,7 @@ namespace CryptomatorLib.Tests.V3
             FileHeader header = _headerCryptor.Create();
 
             // Get the content key from the header (needed for comparison later)
-            DestroyableSecretKey originalKey = ((FileHeaderImpl)header).GetContentKey().Copy();
+            DestroyableSecretKey originalKey = new DestroyableSecretKey(((FileHeaderImpl)header).GetContentKey().GetEncoded(), "AES");
 
             try
             {
@@ -84,7 +84,7 @@ namespace CryptomatorLib.Tests.V3
                 Assert.AreEqual(((FileHeaderImpl)header).GetSeedId(), ((FileHeaderImpl)decryptedHeader).GetSeedId());
 
                 // Compare the content key bytes
-                CollectionAssert.AreEqual(originalKey.GetRaw(), decryptedKey.GetRaw());
+                CollectionAssert.AreEqual(originalKey.GetEncoded(), decryptedKey.GetEncoded());
             }
             finally
             {

@@ -2,19 +2,21 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using CryptomatorLib.Api;
 using CryptomatorLib.Common;
+using System.Diagnostics.CodeAnalysis; // Added for MaybeNull
 
 namespace CryptomatorLib.V3
 {
     /// <summary>
     /// Implementation of the UVFMasterkey interface for Universal Vault Format.
+    /// (Original structure before refactoring attempt)
     /// </summary>
-    internal sealed class UVFMasterkeyImpl : UVFMasterkey, DestroyableMasterkey
+    internal sealed class UVFMasterkeyImpl : UVFMasterkey, DestroyableMasterkey, RevolvingMasterkey, Api.Masterkey
     {
         private static readonly byte[] ROOT_DIRID_KDF_CONTEXT = Encoding.ASCII.GetBytes("rootDirId");
 
@@ -22,7 +24,7 @@ namespace CryptomatorLib.V3
         private readonly byte[] _kdfSalt;
         private readonly int _initialSeed;
         private readonly int _latestSeed;
-        private bool _destroyed;
+        private bool _destroyed = false;
 
         // Properties to implement UVFMasterkey interface
         public Dictionary<int, byte[]> Seeds => _seeds;
@@ -31,6 +33,9 @@ namespace CryptomatorLib.V3
         public int LatestSeed => _latestSeed;
         public byte[] RootDirId => GetRootDirId();
         public int FirstRevision => GetFirstRevision();
+
+        // Properties to implement Masterkey interface
+        public bool IsDestroyed => _destroyed;
 
         /// <summary>
         /// Creates a new UVF masterkey.
@@ -46,6 +51,7 @@ namespace CryptomatorLib.V3
             if (kdfSalt == null)
                 throw new ArgumentNullException(nameof(kdfSalt));
 
+            // Defensive copy of seeds
             _seeds = new Dictionary<int, byte[]>(seeds.Count);
             foreach (var entry in seeds)
             {
@@ -54,6 +60,7 @@ namespace CryptomatorLib.V3
                 _seeds.Add(entry.Key, seedCopy);
             }
 
+            // Defensive copy of salt
             _kdfSalt = new byte[kdfSalt.Length];
             Buffer.BlockCopy(kdfSalt, 0, _kdfSalt, 0, kdfSalt.Length);
 
@@ -245,7 +252,7 @@ namespace CryptomatorLib.V3
                 // Parse the JSON to create a UVFMasterkey
                 return FromDecryptedPayload(json);
             }
-            catch (Exception ex) when (ex is JsonException || ex is ArgumentException || ex is FormatException)
+            catch (Exception ex) when (ex is JsonException || ex is ArgumentException || ex is FormatException || ex is DecoderFallbackException)
             {
                 throw new ArgumentException("Invalid raw key format", nameof(rawKey), ex);
             }
@@ -279,7 +286,8 @@ namespace CryptomatorLib.V3
         public UVFMasterkey Copy()
         {
             ThrowIfDestroyed();
-            return new UVFMasterkeyImpl(_seeds, _kdfSalt, _initialSeed, _latestSeed);
+            var seedsCopy = _seeds.ToDictionary(entry => entry.Key, entry => (byte[])entry.Value.Clone());
+            return new UVFMasterkeyImpl(seedsCopy, (byte[])_kdfSalt.Clone(), _initialSeed, _latestSeed);
         }
 
         /// <summary>
@@ -306,7 +314,7 @@ namespace CryptomatorLib.V3
             if (context == null)
                 throw new ArgumentNullException(nameof(context));
 
-            return HKDFHelper.HkdfSha512(_kdfSalt, _seeds[_latestSeed], context, 32);
+            return HKDF.DeriveKey(HashAlgorithmName.SHA512, _seeds[_latestSeed], 32, _kdfSalt, context);
         }
 
         /// <summary>
@@ -316,8 +324,11 @@ namespace CryptomatorLib.V3
         public byte[] KeyID()
         {
             ThrowIfDestroyed();
-            // Use the root directory ID as the key ID
-            return HKDFHelper.HkdfSha512(_kdfSalt, _seeds[_initialSeed], ROOT_DIRID_KDF_CONTEXT, 32);
+            if (!_seeds.TryGetValue(_initialSeed, out byte[] initialSeedValue))
+            {
+                throw new InvalidOperationException($"Seed value for initialSeed ID {_initialSeed} not found.");
+            }
+            return HKDF.DeriveKey(HashAlgorithmName.SHA512, initialSeedValue, 32, _kdfSalt, ROOT_DIRID_KDF_CONTEXT);
         }
 
         /// <summary>
@@ -327,7 +338,7 @@ namespace CryptomatorLib.V3
         public string KeyIDHex()
         {
             byte[] keyId = KeyID();
-            return BitConverter.ToString(keyId).Replace("-", "").ToLowerInvariant();
+            return Convert.ToHexString(keyId).ToLowerInvariant();
         }
 
         /// <summary>
@@ -347,18 +358,11 @@ namespace CryptomatorLib.V3
             if (string.IsNullOrEmpty(algorithm))
                 throw new ArgumentException("Algorithm must not be null or empty", nameof(algorithm));
 
-            if (!_seeds.ContainsKey(seedId))
+            if (!_seeds.TryGetValue(seedId, out byte[] ikm))
                 throw new ArgumentException($"No seed for revision {seedId}", nameof(seedId));
 
-            byte[] ikm = _seeds[seedId];
-            // Log the IKM being used
-            Debug.WriteLine($"C# SubKey - Using IKM for seedId {seedId} (B64): {Convert.ToBase64String(ikm)}");
-            Debug.WriteLine($"C# SubKey - Salt (B64): {Convert.ToBase64String(_kdfSalt)}");
-            Debug.WriteLine($"C# SubKey - Context (ASCII): {Encoding.ASCII.GetString(context)}");
-            Debug.WriteLine($"C# SubKey - Size: {size}");
-
-            byte[] subkey = HKDFHelper.HkdfSha512(_kdfSalt, ikm, context, size);
-            Debug.WriteLine($"C# SubKey - Derived Subkey (B64): {Convert.ToBase64String(subkey)}");
+            // Use HKDF-SHA512 as specified by kdf property in JSON format
+            byte[] subkey = HKDF.DeriveKey(HashAlgorithmName.SHA512, ikm, size, _kdfSalt, context);
 
             try
             {
@@ -366,7 +370,7 @@ namespace CryptomatorLib.V3
             }
             finally
             {
-                CryptographicOperations.ZeroMemory(subkey);
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(subkey);
             }
         }
 
@@ -378,47 +382,27 @@ namespace CryptomatorLib.V3
         {
             ThrowIfDestroyed();
 
-            // Create a JSON representation of the master key
-            var jsonObject = new Dictionary<string, object>();
+            var seedsObject = _seeds.ToDictionary(
+                entry => Base64Url.Encode(BitConverter.GetBytes(BinaryPrimitives.ReverseEndianness(entry.Key))),
+                entry => Base64Url.Encode(entry.Value)
+            );
 
-            // Add standard fields
-            jsonObject["fileFormat"] = "AES-256-GCM-32k";
-            jsonObject["nameFormat"] = "AES-SIV-512-B64URL";
-            jsonObject["kdf"] = "HKDF-SHA512";
-
-            // Convert seed IDs and values to base64
-            var seedsObject = new Dictionary<string, string>();
-            foreach (var entry in _seeds)
+            var jsonObject = new
             {
-                byte[] seedIdBytes = new byte[4];
-                BinaryPrimitives.WriteInt32BigEndian(seedIdBytes, entry.Key);
+                fileFormat = "AES-256-GCM-32k",
+                nameFormat = "AES-SIV-512-B64URL",
+                kdf = "HKDF-SHA512",
+                seeds = seedsObject,
+                initialSeed = Base64Url.Encode(BitConverter.GetBytes(BinaryPrimitives.ReverseEndianness(_initialSeed))),
+                latestSeed = Base64Url.Encode(BitConverter.GetBytes(BinaryPrimitives.ReverseEndianness(_latestSeed))),
+                kdfSalt = Base64Url.Encode(_kdfSalt)
+            };
 
-                // Use Base64Url.Encode for URL-safe Base64 encoding
-                string seedIdBase64 = Base64Url.Encode(seedIdBytes);
-                string seedValueBase64 = Base64Url.Encode(entry.Value);
-                seedsObject[seedIdBase64] = seedValueBase64;
-            }
-            jsonObject["seeds"] = seedsObject;
-
-            // Add initial and latest seed IDs
-            byte[] initialSeedBytes = new byte[4];
-            BinaryPrimitives.WriteInt32BigEndian(initialSeedBytes, _initialSeed);
-            jsonObject["initialSeed"] = Base64Url.Encode(initialSeedBytes);
-
-            byte[] latestSeedBytes = new byte[4];
-            BinaryPrimitives.WriteInt32BigEndian(latestSeedBytes, _latestSeed);
-            jsonObject["latestSeed"] = Base64Url.Encode(latestSeedBytes);
-
-            // Add KDF salt
-            jsonObject["kdfSalt"] = Base64Url.Encode(_kdfSalt);
-
-            // Serialize to JSON
-            string json = JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions
+            string json = System.Text.Json.JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions
             {
-                WriteIndented = true
+                WriteIndented = false
             });
 
-            // Convert to bytes
             return Encoding.UTF8.GetBytes(json);
         }
 
@@ -431,22 +415,15 @@ namespace CryptomatorLib.V3
             {
                 foreach (var entry in _seeds.ToList())
                 {
-                    CryptographicOperations.ZeroMemory(entry.Value);
+                    System.Security.Cryptography.CryptographicOperations.ZeroMemory(entry.Value);
                     _seeds.Remove(entry.Key);
                 }
 
-                CryptographicOperations.ZeroMemory(_kdfSalt);
+                _seeds.Clear();
+
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(_kdfSalt);
                 _destroyed = true;
             }
-        }
-
-        /// <summary>
-        /// Checks if the key has been destroyed.
-        /// </summary>
-        /// <returns>True if the key has been destroyed, false otherwise</returns>
-        public bool IsDestroyed()
-        {
-            return _destroyed;
         }
 
         /// <summary>
@@ -507,15 +484,11 @@ namespace CryptomatorLib.V3
         public byte[] GetRootDirId()
         {
             ThrowIfDestroyed();
-            // Use initialSeed's value for rootDirId derivation, matching Java
             if (!_seeds.TryGetValue(_initialSeed, out byte[] initialSeedValue))
             {
-                // This should ideally not happen if the masterkey is valid
                 throw new InvalidOperationException($"Seed value for initialSeed ID {_initialSeed} not found.");
             }
-            return HKDFHelper.HkdfSha512(_kdfSalt, initialSeedValue, ROOT_DIRID_KDF_CONTEXT, 32);
-            // Old implementation called KeyData which used _latestSeed:
-            // return KeyData(ROOT_DIRID_KDF_CONTEXT);
+            return HKDF.DeriveKey(HashAlgorithmName.SHA512, initialSeedValue, 32, _kdfSalt, ROOT_DIRID_KDF_CONTEXT);
         }
 
         /// <summary>
@@ -590,8 +563,14 @@ namespace CryptomatorLib.V3
         {
             if (_destroyed)
             {
-                throw new ObjectDisposedException(GetType().Name, "Masterkey is destroyed");
+                throw new ObjectDisposedException(GetType().FullName, "Masterkey has been destroyed");
             }
+        }
+
+        // Explicitly implement Api.Masterkey.IsDestroyed()
+        bool Api.Masterkey.IsDestroyed()
+        {
+            return this._destroyed;
         }
     }
 }

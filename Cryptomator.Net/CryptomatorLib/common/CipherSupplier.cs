@@ -46,10 +46,13 @@ namespace CryptomatorLib.Common
         /// <returns>A lease supplying a crypto transform for encryption</returns>
         public ObjectPool<ICryptoTransform>.Lease<ICryptoTransform> EncryptionCipher(DestroyableSecretKey key, byte[] iv)
         {
-            if (key == null)
-                throw new ArgumentNullException(nameof(key));
-            
-            return EncryptionCipher(key.GetRaw(), iv);
+            if (key == null || key.IsDestroyed)
+            {
+                throw new ArgumentException("Key must be valid and not destroyed", nameof(key));
+            }
+
+            byte[] keyBytes = key.GetEncoded();
+            return EncryptionCipher(keyBytes, iv);
         }
 
         /// <summary>
@@ -62,14 +65,14 @@ namespace CryptomatorLib.Common
         {
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
-            if (iv == null) 
+            if (iv == null)
                 throw new ArgumentNullException(nameof(iv));
 
             ObjectPool<ICryptoTransform>.Lease<ICryptoTransform> lease = _encryptorPool.Get();
-            
+
             // Create a new transform since we can't reuse existing ones with different keys/IVs
             ICryptoTransform transform = CreateTransform(key, iv, true);
-            
+
             return new ObjectPool<ICryptoTransform>.Lease<ICryptoTransform>(_encryptorPool, transform);
         }
 
@@ -81,10 +84,13 @@ namespace CryptomatorLib.Common
         /// <returns>A lease supplying a crypto transform for decryption</returns>
         public ObjectPool<ICryptoTransform>.Lease<ICryptoTransform> DecryptionCipher(DestroyableSecretKey key, byte[] iv)
         {
-            if (key == null)
-                throw new ArgumentNullException(nameof(key));
-            
-            return DecryptionCipher(key.GetRaw(), iv);
+            if (key == null || key.IsDestroyed)
+            {
+                throw new ArgumentException("Key must be valid and not destroyed", nameof(key));
+            }
+
+            byte[] keyBytes = key.GetEncoded();
+            return DecryptionCipher(keyBytes, iv);
         }
 
         /// <summary>
@@ -101,10 +107,10 @@ namespace CryptomatorLib.Common
                 throw new ArgumentNullException(nameof(iv));
 
             ObjectPool<ICryptoTransform>.Lease<ICryptoTransform> lease = _decryptorPool.Get();
-            
+
             // Create a new transform since we can't reuse existing ones with different keys/IVs
             ICryptoTransform transform = CreateTransform(key, iv, false);
-            
+
             return new ObjectPool<ICryptoTransform>.Lease<ICryptoTransform>(_decryptorPool, transform);
         }
 
@@ -178,10 +184,10 @@ namespace CryptomatorLib.Common
             public byte[] TransformFinalBlock(byte[] inputBuffer, int inputOffset, int inputCount)
             {
                 byte[] output = new byte[inputCount];
-                
+
                 if (inputCount > 0)
                     TransformBlock(inputBuffer, inputOffset, inputCount, output, 0);
-                
+
                 return output;
             }
 
@@ -247,7 +253,7 @@ namespace CryptomatorLib.Common
                 {
                     if (_forEncryption)
                     {
-                        _aesGcm.Encrypt(_nonce, inputBuffer.AsSpan(inputOffset, inputCount), 
+                        _aesGcm.Encrypt(_nonce, inputBuffer.AsSpan(inputOffset, inputCount),
                             outputBuffer.AsSpan(outputOffset, inputCount), _tag);
                     }
                     else
@@ -266,10 +272,10 @@ namespace CryptomatorLib.Common
             public byte[] TransformFinalBlock(byte[] inputBuffer, int inputOffset, int inputCount)
             {
                 byte[] output = new byte[inputCount];
-                
+
                 if (inputCount > 0)
                     TransformBlock(inputBuffer, inputOffset, inputCount, output, 0);
-                
+
                 return output;
             }
 
@@ -314,7 +320,7 @@ namespace CryptomatorLib.Common
                     {
                         result = AesKeyWrap.Unwrap(_key, inputBuffer);
                     }
-                    
+
                     Buffer.BlockCopy(result, 0, outputBuffer, outputOffset, result.Length);
                     return result.Length;
                 }
@@ -330,11 +336,11 @@ namespace CryptomatorLib.Common
                 {
                     if (inputCount == 0)
                         return Array.Empty<byte>();
-                    
+
                     // Copy the input to a new buffer
                     byte[] input = new byte[inputCount];
                     Buffer.BlockCopy(inputBuffer, inputOffset, input, 0, inputCount);
-                    
+
                     // Perform the operation
                     if (_forEncryption)
                     {
@@ -359,4 +365,4 @@ namespace CryptomatorLib.Common
 
         #endregion
     }
-} 
+}

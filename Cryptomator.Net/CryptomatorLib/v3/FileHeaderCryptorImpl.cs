@@ -116,8 +116,8 @@ namespace CryptomatorLib.V3
                 try
                 {
                     // Create a GCM instance
-                    using var aesGcm = new AesGcm(headerKey.GetRaw());
-                    byte[] contentKeyData = headerImpl.GetContentKey().GetRaw();
+                    using var aesGcm = new AesGcm(headerKey.GetEncoded());
+                    byte[] contentKeyData = headerImpl.GetContentKey().GetEncoded();
                     byte[] tag = new byte[FileHeaderImpl.TAG_LEN];
 
                     // Encrypt content key
@@ -193,7 +193,7 @@ namespace CryptomatorLib.V3
                 try
                 {
                     // Decrypt with AES-GCM
-                    using var aesGcm = new AesGcm(headerKey.GetRaw());
+                    using var aesGcm = new AesGcm(headerKey.GetEncoded());
                     aesGcm.Decrypt(nonce, ciphertext, tag, contentKeyBytes, aad);
                 }
                 catch (CryptographicException ex)

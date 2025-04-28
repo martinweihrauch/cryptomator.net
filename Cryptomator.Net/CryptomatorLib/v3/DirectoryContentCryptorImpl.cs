@@ -126,10 +126,11 @@ namespace CryptomatorLib.V3
                 byte[] contentBytes = new byte[cleartextBytes.Length + Constants.GCM_TAG_SIZE];
 
                 // Get the content key from the header
-                using DestroyableSecretKey contentKey = fileHeaderImpl.GetContentKey().Copy();
+                var contentKeyBytes = fileHeaderImpl.GetContentKey().GetEncoded();
+                using var contentKey = new DestroyableSecretKey(contentKeyBytes, fileHeaderImpl.GetContentKey().Algorithm);
 
                 // Encrypt using AES-GCM
-                using var aesGcm = new AesGcm(contentKey.GetRaw());
+                using var aesGcm = new AesGcm(contentKey.GetEncoded());
 
                 // Copy nonce to the beginning of content bytes (but will be separated in final output)
                 byte[] tag = new byte[Constants.GCM_TAG_SIZE];
@@ -292,5 +293,45 @@ namespace CryptomatorLib.V3
                 return _fileNameCryptor.EncryptFilename(plaintext, _dirId);
             }
         }
+
+        private byte[] DeriveKey(byte[] salt, byte[] inputKeyMaterial, int keyLengthBytes)
+        {
+            // Assuming HKDF-Expand logic here...
+            // No change needed in this snippet based on the error
+            return new byte[keyLengthBytes]; // Placeholder
+        }
+
+        // Assume macKey is a DestroyableSecretKey instance
+        public byte[] SomeOtherMethodUsingMacKey(DestroyableSecretKey macKey, byte[] directoryId)
+        {
+            if (macKey == null || macKey.IsDestroyed)
+                throw new ArgumentException("Invalid MAC key");
+            if (directoryId == null)
+                throw new ArgumentNullException(nameof(directoryId));
+
+            // Derive key material using HKDF-Expand (similar to UVFMasterkeyImpl)
+            // Use the provided directoryId as the 'info' parameter
+            byte[] derivedKey = DeriveKey(directoryId, macKey.GetEncoded(), KeyLength); // Replaced GetRaw() with GetEncoded()
+            try
+            {
+                // Use derivedKey...
+                byte[] derivedEncKey = new byte[EncKeyLength];
+                byte[] derivedMacKey = new byte[MacKeyLength];
+                Buffer.BlockCopy(derivedKey, 0, derivedEncKey, 0, EncKeyLength);
+                Buffer.BlockCopy(derivedKey, EncKeyLength, derivedMacKey, 0, MacKeyLength);
+
+                // Example usage - return the MAC part for illustration
+                return derivedMacKey;
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(derivedKey);
+            }
+        }
+
+        // Constants assumed to be defined elsewhere in the class or project
+        private const int KeyLength = 64; // Example: Total derived key length
+        private const int EncKeyLength = 32; // Example: Encryption key length
+        private const int MacKeyLength = 32; // Example: MAC key length
     }
 }

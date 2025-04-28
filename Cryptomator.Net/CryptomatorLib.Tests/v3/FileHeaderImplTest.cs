@@ -70,7 +70,7 @@ namespace CryptomatorLib.Tests.V3
             // Get the content key and verify it matches the input
             using (DestroyableSecretKey retrievedKey = header.GetContentKey())
             {
-                CollectionAssert.AreEqual(keyBytes, retrievedKey.GetRaw());
+                CollectionAssert.AreEqual(keyBytes, retrievedKey.GetEncoded());
             }
         }
     }

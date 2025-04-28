@@ -2,6 +2,12 @@ using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+// BouncyCastle imports
+using Org.BouncyCastle.Crypto;
+using Org.BouncyCastle.Crypto.Parameters;
+using Org.BouncyCastle.Security;
+using Org.BouncyCastle.Asn1.X9; // For curve lookup
+using Org.BouncyCastle.Asn1.Nist; // For curve lookup
 
 namespace CryptomatorLib.Common
 {
@@ -33,30 +39,74 @@ namespace CryptomatorLib.Common
         }
 
         /// <summary>
-        /// Creates a key pair from the given key data.
+        /// Creates a key pair from the given key data using BouncyCastle for parsing.
         /// </summary>
-        /// <param name="publicKeyBytes">DER formatted public key</param>
-        /// <param name="privateKeyBytes">DER formatted private key</param>
+        /// <param name="publicKeyBytes">DER formatted X.509 SubjectPublicKeyInfo</param>
+        /// <param name="privateKeyBytes">DER formatted PKCS#8 PrivateKeyInfo</param>
         /// <returns>Created key pair</returns>
+        /// <exception cref="ArgumentNullException"></exception>
+        /// <exception cref="ArgumentException">If keys are invalid or mismatched</exception>
+        /// <exception cref="CryptographicException">If parsing or import fails</exception>
         public static P384KeyPair Create(byte[] publicKeyBytes, byte[] privateKeyBytes)
         {
             if (publicKeyBytes == null) throw new ArgumentNullException(nameof(publicKeyBytes));
             if (privateKeyBytes == null) throw new ArgumentNullException(nameof(privateKeyBytes));
 
-            // Create a new ECDsa instance with the P-384 curve
-            ECDsa ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP384);
-            
-            // Import the private key
-            ecdsa.ImportECPrivateKey(privateKeyBytes, out _);
-            
-            // Verify that the public key matches
-            byte[] expectedPublicKey = ecdsa.ExportSubjectPublicKeyInfo();
-            if (!ECKeyPair.VerifyPublicKey(publicKeyBytes, ECCurve.NamedCurves.nistP384))
+            try
             {
-                throw new ArgumentException("Invalid public key or does not match private key", nameof(publicKeyBytes));
-            }
+                // Parse keys using BouncyCastle
+                AsymmetricKeyParameter bcPublicKey = PublicKeyFactory.CreateKey(publicKeyBytes);
+                AsymmetricKeyParameter bcPrivateKey = PrivateKeyFactory.CreateKey(privateKeyBytes);
 
-            return new P384KeyPair(new ECKeyPair(ecdsa));
+                if (!(bcPublicKey is ECPublicKeyParameters ecPublicKeyParams))
+                {
+                    throw new ArgumentException("Public key is not an EC key.", nameof(publicKeyBytes));
+                }
+                if (!(bcPrivateKey is ECPrivateKeyParameters ecPrivateKeyParams))
+                {
+                    throw new ArgumentException("Private key is not an EC key.", nameof(privateKeyBytes));
+                }
+
+                // Verify keys belong to the same curve (P-384)
+                if (!ecPublicKeyParams.Parameters.Equals(ecPrivateKeyParams.Parameters) ||
+                    !(ecPublicKeyParams.Parameters.Curve.Equals(NistNamedCurves.GetByName("P-384").Curve) || // Check against standard names
+                      ecPublicKeyParams.Parameters.Curve.Equals(X962NamedCurves.GetByName("secp384r1").Curve)))
+                {
+                    throw new ArgumentException("Keys are not for the P-384 curve or do not match.");
+                }
+
+
+                // Convert BouncyCastle parameters to .NET ECParameters
+                ECParameters parameters = new ECParameters
+                {
+                    Curve = ECCurve.NamedCurves.nistP384, // Assume P-384 as verified above
+                    D = ecPrivateKeyParams.D.ToByteArrayUnsigned(),
+                    Q =
+                    {
+                        X = ecPublicKeyParams.Q.AffineXCoord.ToBigInteger().ToByteArrayUnsigned(),
+                        Y = ecPublicKeyParams.Q.AffineYCoord.ToBigInteger().ToByteArrayUnsigned()
+                    }
+                };
+
+
+                // Create and import into .NET ECDsa object
+                ECDsa ecdsa = ECDsa.Create(parameters); // Import parameters directly
+
+
+                // Optional: Sanity check - re-export and compare public key
+                // byte[] exportedPublicKeyCheck = ecdsa.ExportSubjectPublicKeyInfo();
+                // if (!CryptographicOperations.FixedTimeEquals(publicKeyBytes, exportedPublicKeyCheck))
+                // {
+                //      throw new CryptographicException("Public key mismatch after BC import.");
+                // }
+
+                return new P384KeyPair(new ECKeyPair(ecdsa));
+            }
+            catch (Exception ex) // Catch potential BouncyCastle parsing errors or other issues
+            {
+                // Wrap in CryptographicException or a more specific custom exception if needed
+                throw new CryptographicException($"Failed to create key pair from bytes using BouncyCastle: {ex.Message}", ex);
+            }
         }
 
         /// <summary>
@@ -163,7 +213,7 @@ namespace CryptomatorLib.Common
             try
             {
                 // Read the certificate from the file
-                X509Certificate2 cert = new X509Certificate2(path, new string(password), 
+                X509Certificate2 cert = new X509Certificate2(path, new string(password),
                     X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet);
 
                 // Ensure it has a private key

@@ -134,10 +134,12 @@ namespace CryptomatorLib.V3
 
             try
             {
-                using DestroyableSecretKey contentKey = headerImpl.GetContentKey().Copy();
+                // Get content key, create a copy for independent use
+                var contentKeyBytes = headerImpl.GetContentKey().GetEncoded();
+                using var contentKey = new DestroyableSecretKey(contentKeyBytes, headerImpl.GetContentKey().Algorithm);
 
                 // Encrypt using AES-GCM
-                using var aesGcm = new AesGcm(contentKey.GetRaw());
+                using var aesGcm = new AesGcm(contentKey.GetEncoded());
 
                 // Encrypt in-place
                 byte[] tag = new byte[Constants.GCM_TAG_SIZE];
@@ -231,11 +233,14 @@ namespace CryptomatorLib.V3
             Debug.WriteLine($"Decrypting chunk {chunkNumber} with nonce: {BitConverter.ToString(nonce)}");
             Debug.WriteLine($"Decryption tag for chunk {chunkNumber}: {BitConverter.ToString(tag)}");
 
-            using DestroyableSecretKey contentKey = headerImpl.GetContentKey().Copy();
-
             try
             {
-                using var aesGcm = new AesGcm(contentKey.GetRaw());
+                // Get content key, create a copy for independent use
+                var contentKeyBytes = headerImpl.GetContentKey().GetEncoded();
+                using var contentKey = new DestroyableSecretKey(contentKeyBytes, headerImpl.GetContentKey().Algorithm);
+
+                // Use AES-GCM for decryption
+                using var aesGcm = new AesGcm(contentKey.GetEncoded());
 
                 // Extract ciphertext payload (without nonce and tag)
                 ReadOnlySpan<byte> ciphertextPayload = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE, payloadSize).Span;
