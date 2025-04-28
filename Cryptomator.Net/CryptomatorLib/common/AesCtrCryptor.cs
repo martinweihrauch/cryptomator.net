@@ -23,7 +23,7 @@ namespace CryptomatorLib.Common
 
             using (var supplier = CipherSupplier.AES_CTR.EncryptionCipher(key, iv))
             {
-                return supplier.Get().TransformFinalBlock(data, 0, data.Length);
+                return supplier.TransformFinalBlock(data, 0, data.Length);
             }
         }
 
@@ -42,7 +42,7 @@ namespace CryptomatorLib.Common
 
             using (var supplier = CipherSupplier.AES_CTR.DecryptionCipher(key, iv))
             {
-                return supplier.Get().TransformFinalBlock(data, 0, data.Length);
+                return supplier.TransformFinalBlock(data, 0, data.Length);
             }
         }
     }

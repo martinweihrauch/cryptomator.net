@@ -29,13 +29,13 @@ namespace CryptomatorLib.Tests.Common
             Console.WriteLine("Warning: Using simplified TestDecryptingReadableByteChannel (Test Version). No decryption will occur.");
         }
 
-        public bool IsOpen => !_closed && _source.IsOpen;
+        public bool IsOpen => !_closed;
 
         // Rename property to avoid conflict
         private long CurrentPositionProp
         {
-            get => _source.Position;
-            set => _source.Position = value;
+            get => _source.Position();
+            set => _source.Position(value);
         }
 
         // Implement Position() method required by interface
@@ -59,21 +59,9 @@ namespace CryptomatorLib.Tests.Common
         // Add CurrentSize property required by interface
         public long CurrentSize => Size();
 
-        public async Task<int> Read(byte[] dst)
+        public int Read(byte[] dst)
         {
-            if (_closed)
-            {
-                throw new IOException("Channel closed");
-            }
-            Console.WriteLine($"Warning: Simplified Read requesting {dst.Length} bytes. Data not decrypted.");
-            // In a real scenario, decryption would happen here after reading from source.
-            // For the test version, we just read plain data from the source.
-            var bytesRead = await _source.Read(dst);
-            if (bytesRead == -1) // Check for end of stream
-            {
-                Close(); // Auto-close on EOF like some stream implementations
-            }
-            return bytesRead;
+            return Read(dst, 0, dst.Length);
         }
 
         public int Read(byte[] buffer, int offset, int count)
@@ -83,18 +71,12 @@ namespace CryptomatorLib.Tests.Common
                 throw new IOException("Channel closed");
             }
             Console.WriteLine($"Warning: Simplified sync Read requesting {count} bytes. Data not decrypted.");
-            // Simple synchronous read from source for the test version
-            // Note: This assumes _source is a Stream or similar with a sync Read
-            // Need to handle potential type issues if _source is strictly async channel
-            if (_source is Stream sourceStream)
+            int bytesRead = _source.Read(buffer, offset, count);
+            if (bytesRead <= 0)
             {
-                return sourceStream.Read(buffer, offset, count);
+                Close();
             }
-            // Fallback or throw if not a stream? For now, throw.
-            throw new NotSupportedException("Synchronous Read not directly supported by the underlying source type in this test stub.");
-            // Alternatively, block on async version? (Generally discouraged)
-            // var task = Read(buffer.AsMemory(offset, count));
-            // return task.GetAwaiter().GetResult();
+            return bytesRead;
         }
 
         public int Write(byte[] buffer, int offset, int count)
@@ -133,10 +115,7 @@ namespace CryptomatorLib.Tests.Common
 
         public ISeekableByteChannel Truncate(long size)
         {
-            // Simplification: delegate or throw?
-            // throw new NotImplementedException("Truncate not supported in simplified test version.");
-            // Or maybe just delegate?
-            return _source.Truncate(size);
+            throw new NotSupportedException("Truncate is not part of ISeekableByteChannel.");
         }
     }
 }

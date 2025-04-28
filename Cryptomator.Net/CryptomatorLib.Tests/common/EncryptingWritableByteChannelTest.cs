@@ -5,7 +5,6 @@ using Moq;
 using System;
 using System.IO;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace CryptomatorLib.Tests.Common
 {
@@ -16,7 +15,6 @@ namespace CryptomatorLib.Tests.Common
         private Mock<FileContentCryptor> _contentCryptor;
         private Mock<FileHeaderCryptor> _headerCryptor;
         private Mock<FileHeader> _header;
-        private EncryptingWritableByteChannel _channel;
         private MemoryStream _out;
 
         [TestInitialize]
@@ -31,7 +29,6 @@ namespace CryptomatorLib.Tests.Common
             _cryptor.Setup(c => c.FileHeaderCryptor()).Returns(_headerCryptor.Object);
 
             _contentCryptor.Setup(c => c.CleartextChunkSize()).Returns(10);
-            _contentCryptor.Setup(c => c.CiphertextChunkSize()).Returns(20);
 
             _headerCryptor.Setup(h => h.Create()).Returns(_header.Object);
             _headerCryptor.Setup(h => h.EncryptHeader(_header.Object)).Returns(new Memory<byte>(Encoding.UTF8.GetBytes("hhhhh")));
@@ -47,41 +44,39 @@ namespace CryptomatorLib.Tests.Common
                     return new Memory<byte>(Encoding.UTF8.GetBytes("<" + content.ToUpper() + ">"));
                 });
 
-            _out = new MemoryStream();
-            var mockSink = new Mock<IWritableByteChannel>();
-            mockSink.Setup(s => s.Write(It.IsAny<byte[]>())).Returns<byte[]>(data => Task.FromResult(data.Length)).Callback<byte[]>(bytes => _out.Write(bytes, 0, bytes.Length));
-            mockSink.Setup(s => s.Close()).Callback(() => _out.Close());
-            mockSink.Setup(s => s.IsOpen).Returns(() => _out.CanWrite);
-
-            // Use the renamed test class
-            _channel = new TestEncryptingWritableByteChannel(mockSink.Object, _cryptor.Object);
+            // _out will be initialized within each test method now
+            // _out = new MemoryStream();
         }
 
         [TestMethod]
         [DisplayName("Test Encryption")]
         public void TestEncryption()
         {
-            using var dstFile = new MemoryStream(100);
-            var testChannel = new StreamTestByteChannel(dstFile);
+            // Initialize _out for this test
+            _out = new MemoryStream();
 
-            using (var channel = new EncryptingWritableByteChannel(testChannel, _cryptor.Object))
+            // Create channel within using block for proper disposal
+            using (var channel = new EncryptingWritableByteChannel(_out, _cryptor.Object, leaveOpen: true))
             {
                 byte[] data1 = Encoding.UTF8.GetBytes("hello world 1");
-                channel.Write(data1, 0, data1.Length);
+                channel.Write(data1, 0, data1.Length); // Use local channel variable
 
                 byte[] data2 = Encoding.UTF8.GetBytes("hello world 2");
-                channel.Write(data2, 0, data2.Length);
-            }
+                channel.Write(data2, 0, data2.Length); // Use local channel variable
 
-            // Reset stream position to beginning for reading
-            dstFile.Position = 0;
+                // No explicit Close() needed, using block handles it
+                // channel.Close();
+            } // channel is closed and disposed here, but _out remains open
 
-            // Read the encrypted content
+            // Reset stream position AFTER the using block
+            _out.Position = 0;
+
+            // Read the encrypted content from _out
             byte[] resultBuffer = new byte[100];
-            int bytesRead = dstFile.Read(resultBuffer, 0, resultBuffer.Length);
+            int bytesRead = _out.Read(resultBuffer, 0, resultBuffer.Length);
             string encrypted = Encoding.UTF8.GetString(resultBuffer, 0, bytesRead);
 
-            // Verify the expected encrypted content
+            // Verify the expected encrypted content (matches Java)
             Assert.AreEqual("hhhhh<HELLO WORL><D 1HELLO W><ORLD 2>", encrypted);
         }
 
@@ -89,21 +84,23 @@ namespace CryptomatorLib.Tests.Common
         [DisplayName("Test Encryption Of Empty File")]
         public void TestEncryptionOfEmptyFile()
         {
-            PrepareTestChannel(Array.Empty<byte>());
-            _channel.Close();
-            // encrypting an empty file should result in an empty file:
-            _out.Position = 0; // Reset position to read from start
-            byte[] resultBytes = new byte[_out.Length];
+            // Initialize _out for this test
+            _out = new MemoryStream();
+
+            // Create channel within using block
+            using (var channel = new EncryptingWritableByteChannel(_out, _cryptor.Object, leaveOpen: true))
+            {
+                // Write nothing for an empty file
+            } // channel is closed and disposed here, but _out remains open
+
+            // Reset stream position AFTER the using block
+            _out.Position = 0;
+            byte[] resultBytes = new byte[_out.Length]; // Read the actual length written
             _out.Read(resultBytes, 0, resultBytes.Length);
             string resultString = Encoding.UTF8.GetString(resultBytes);
-            Assert.AreEqual("", resultString, "Encrypting an empty file should result in an empty file");
-        }
 
-        private void PrepareTestChannel(byte[] data)
-        {
-            _out.Position = 0;
-            _out.Write(data, 0, data.Length);
-            _out.Position = 0;
+            // Assert against Java's expected output
+            Assert.AreEqual("hhhhh<>", resultString, "Encrypting an empty file should result in header + empty chunk marker");
         }
     }
 }

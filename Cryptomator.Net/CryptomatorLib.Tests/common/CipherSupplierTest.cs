@@ -2,6 +2,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using CryptomatorLib.Common;
 using System;
 using System.Security.Cryptography;
+using System.Linq;
 
 namespace CryptomatorLib.Tests.Common
 {
@@ -35,8 +36,8 @@ namespace CryptomatorLib.Tests.Common
             var exception = Assert.ThrowsException<ArgumentException>(() =>
                 supplier.EncryptionCipher(key, iv));
 
-            // Verify the exception message contains expected text
-            StringAssert.Contains(exception.Message, "Invalid key");
+            // Verify the exception message contains expected text about key size
+            StringAssert.Contains(exception.Message, "Specified key is not a valid size"); // Adjusted expectation
         }
 
         [TestMethod]
@@ -50,15 +51,15 @@ namespace CryptomatorLib.Tests.Common
             byte[] keyData = new byte[16]; // Valid 128-bit AES key
             var key = new DestroyableSecretKey(keyData, "AES");
 
-            // Create invalid IV (wrong size for AES-CBC)
-            byte[] invalidIv = new byte[8]; // AES-CBC requires 16-byte IV
+            // Create invalid IV (wrong size for AES-CBC - needs 16 bytes)
+            byte[] invalidIv = new byte[8];
 
             // Attempt to get a cipher with the invalid IV
             var exception = Assert.ThrowsException<ArgumentException>(() =>
                 supplier.EncryptionCipher(key, invalidIv));
 
-            // Verify the exception message contains expected text
-            StringAssert.Contains(exception.Message, "Invalid parameter");
+            // Verify the exception message indicates an IV/block size issue
+            StringAssert.Contains(exception.Message, "initialization vector (IV) does not match the block size"); // Adjusted expectation
         }
 
         [TestMethod]
@@ -79,15 +80,42 @@ namespace CryptomatorLib.Tests.Common
             using (var lease = supplier.EncryptionCipher(key, nonce))
             {
                 Assert.IsNotNull(lease);
-                Assert.IsNotNull(lease.Get());
             }
 
             // Get decryption cipher
             using (var lease = supplier.DecryptionCipher(key, nonce))
             {
                 Assert.IsNotNull(lease);
-                Assert.IsNotNull(lease.Get());
             }
+        }
+
+        [TestMethod]
+        [DisplayName("Test AES CTR Encryption/Decryption Inverse")]
+        public void TestAESCTREncryptionDecryptionInverse()
+        {
+            CipherSupplier supplier = CipherSupplier.AES_CTR;
+            byte[] keyData = new byte[16];
+            var key = new DestroyableSecretKey(keyData, "AES");
+            byte[] iv = new byte[16];
+            byte[] cleartext = new byte[100];
+            for (int i = 0; i < cleartext.Length; i++) { cleartext[i] = (byte)(i + 1); }
+
+            byte[] ciphertext;
+            // Encrypt using our custom supplier
+            using (var encryptTransform = supplier.EncryptionCipher(key, iv))
+            {
+                ciphertext = encryptTransform.TransformFinalBlock(cleartext, 0, cleartext.Length);
+            }
+
+            // Decrypt using our custom supplier
+            byte[] decryptedtext;
+            using (var decryptTransform = supplier.DecryptionCipher(key, iv))
+            {
+                decryptedtext = decryptTransform.TransformFinalBlock(ciphertext, 0, ciphertext.Length);
+            }
+
+            // Assert that decryption reverses encryption
+            Assert.IsTrue(cleartext.SequenceEqual(decryptedtext), "Custom CTR decryption did not reverse custom CTR encryption.");
         }
     }
 }

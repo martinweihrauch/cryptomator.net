@@ -189,11 +189,12 @@ namespace CryptomatorLib.Tests.V3
             [DisplayName("Decrypt file with incorrect dirId")]
             public void TestDecryptMalformed4()
             {
-                // Create a different directory ID same as the Java test
-                byte[] differentDirId = new byte[] { 0xDE, 0x0A, 0xD };
+                // Create a different, but valid, 32-byte directory ID
+                byte[] differentDirId = new byte[32];
+                Array.Fill(differentDirId, (byte)0xFF); // Fill with a different value
 
                 DirectoryMetadataImpl differentDirIdMetadata = new DirectoryMetadataImpl(
-                    DirectoryContentCryptorImplTest.masterkey.GetFirstRevision(),
+                    DirectoryContentCryptorImplTest.masterkey.GetCurrentRevision(), // Use current revision like in setup
                     differentDirId);
 
                 IDirectoryContentCryptor.Decrypting differentDirIdDec =

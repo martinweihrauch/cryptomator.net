@@ -16,7 +16,7 @@ namespace CryptomatorLib.IO
         private int _bufferPosition = 0;
         private readonly bool _leaveOpen;
         private bool _disposed = false;
-        
+
         /// <summary>
         /// Creates a new encrypting stream.
         /// </summary>
@@ -28,37 +28,34 @@ namespace CryptomatorLib.IO
             _baseStream = baseStream ?? throw new ArgumentNullException(nameof(baseStream));
             if (aes == null) throw new ArgumentNullException(nameof(aes));
             _leaveOpen = leaveOpen;
-            
+
             // Use the library's AES-CTR implementation
-            using (var supplier = CipherSupplier.AES_CTR.EncryptionCipher(aes.Key, aes.IV))
-            {
-                _encryptor = supplier.Get();
-            }
-            
+            _encryptor = CipherSupplier.AES_CTR.EncryptionCipher(aes.Key, aes.IV);
+
             // Buffer for encryption
             _buffer = new byte[8192]; // Default buffer size
         }
-        
+
         /// <summary>
         /// Gets whether the stream supports reading.
         /// </summary>
         public override bool CanRead => _baseStream.CanRead;
-        
+
         /// <summary>
         /// Gets whether the stream supports seeking.
         /// </summary>
         public override bool CanSeek => false;
-        
+
         /// <summary>
         /// Gets whether the stream supports writing.
         /// </summary>
         public override bool CanWrite => _baseStream.CanWrite;
-        
+
         /// <summary>
         /// Gets the length of the stream.
         /// </summary>
         public override long Length => throw new NotSupportedException();
-        
+
         /// <summary>
         /// Gets or sets the position within the stream.
         /// </summary>
@@ -67,7 +64,7 @@ namespace CryptomatorLib.IO
             get => throw new NotSupportedException();
             set => throw new NotSupportedException();
         }
-        
+
         /// <summary>
         /// Reads data from the stream.
         /// </summary>
@@ -79,23 +76,23 @@ namespace CryptomatorLib.IO
         {
             if (_disposed) throw new ObjectDisposedException(nameof(AesCtrEncryptingStream));
             if (!CanRead) throw new NotSupportedException("Stream does not support reading");
-            
+
             int bytesRead = _baseStream.Read(buffer, offset, count);
             if (bytesRead > 0)
             {
                 byte[] tempBuffer = new byte[bytesRead];
                 Buffer.BlockCopy(buffer, offset, tempBuffer, 0, bytesRead);
-                
+
                 // Encrypt the data
                 byte[] encryptedData = _encryptor.TransformFinalBlock(tempBuffer, 0, bytesRead);
-                
+
                 // Copy back to original buffer
                 Buffer.BlockCopy(encryptedData, 0, buffer, offset, bytesRead);
             }
-            
+
             return bytesRead;
         }
-        
+
         /// <summary>
         /// Writes data to the stream.
         /// </summary>
@@ -106,40 +103,40 @@ namespace CryptomatorLib.IO
         {
             if (_disposed) throw new ObjectDisposedException(nameof(AesCtrEncryptingStream));
             if (!CanWrite) throw new NotSupportedException("Stream does not support writing");
-            
+
             byte[] tempBuffer = new byte[count];
             Buffer.BlockCopy(buffer, offset, tempBuffer, 0, count);
-            
+
             // Encrypt the data
             byte[] encryptedData = _encryptor.TransformFinalBlock(tempBuffer, 0, count);
-            
+
             // Write to the base stream
             _baseStream.Write(encryptedData, 0, encryptedData.Length);
         }
-        
+
         /// <summary>
         /// Flushes the stream.
         /// </summary>
         public override void Flush()
         {
             if (_disposed) throw new ObjectDisposedException(nameof(AesCtrEncryptingStream));
-            
+
             // Flush any buffered data
             if (_bufferPosition > 0)
             {
                 byte[] tempBuffer = new byte[_bufferPosition];
                 Buffer.BlockCopy(_buffer, 0, tempBuffer, 0, _bufferPosition);
-                
+
                 // Encrypt and write the data
                 byte[] encryptedData = _encryptor.TransformFinalBlock(tempBuffer, 0, _bufferPosition);
                 _baseStream.Write(encryptedData, 0, encryptedData.Length);
-                
+
                 _bufferPosition = 0;
             }
-            
+
             _baseStream.Flush();
         }
-        
+
         /// <summary>
         /// Seeks to a position in the stream.
         /// </summary>
@@ -150,7 +147,7 @@ namespace CryptomatorLib.IO
         {
             throw new NotSupportedException("Seeking is not supported");
         }
-        
+
         /// <summary>
         /// Sets the length of the stream.
         /// </summary>
@@ -159,7 +156,7 @@ namespace CryptomatorLib.IO
         {
             throw new NotSupportedException("Setting length is not supported");
         }
-        
+
         /// <summary>
         /// Releases all resources used by the stream.
         /// </summary>
@@ -170,20 +167,20 @@ namespace CryptomatorLib.IO
             {
                 // Flush any remaining data
                 Flush();
-                
+
                 // Dispose the encryptor
                 _encryptor.Dispose();
-                
+
                 // Close the base stream if required
                 if (!_leaveOpen)
                 {
                     _baseStream.Dispose();
                 }
-                
+
                 _disposed = true;
             }
-            
+
             base.Dispose(disposing);
         }
     }
-} 
+}

@@ -71,8 +71,8 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
             // Create a dummy stream and wrap it in a test channel
             using var nullStream = new NullStream();
             using var channelAdapter = new NullTestChannel();
-            
-            using (var encryptingChannel = new CryptomatorLib.Tests.Common.EncryptingWritableByteChannel(channelAdapter, _cryptor))
+
+            using (var encryptingChannel = new CryptomatorLib.Tests.Common.TestEncryptingWritableByteChannel(channelAdapter, _cryptor))
             {
                 int remaining = sizeBytes;
                 while (remaining > 0)
@@ -89,14 +89,14 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
         {
             _csprng.Dispose();
         }
-        
+
         /// <summary>
         /// A null stream that discards all data
         /// </summary>
         private class NullStream : Stream
         {
             private long _position = 0;
-            
+
             public override bool CanRead => false;
             public override bool CanSeek => true;
             public override bool CanWrite => true;
@@ -142,49 +142,24 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
                 _position += count;
             }
         }
-        
+
         /// <summary>
         /// A test channel that implements ISeekableByteChannel and discards all data
         /// </summary>
-        private class NullTestChannel : ISeekableByteChannel, IDisposable
+        private class NullTestChannel : IWritableByteChannel, IDisposable
         {
             private bool _open = true;
-            private long _position = 0;
-            
-            public long CurrentPosition => _position;
-            
-            public long CurrentSize => _position;
-            
+
+            public bool IsOpen => _open;
+
             public void Close() => _open = false;
-            
+
             public void Dispose() => Close();
-            
-            public int Read(byte[] dst, int offset, int count)
+
+            public Task<int> Write(byte[] src)
             {
-                throw new NotImplementedException();
+                return Task.FromResult(src.Length);
             }
-            
-            public int Write(byte[] src, int offset, int count)
-            {
-                _position += count;
-                return count;
-            }
-            
-            public long Seek(long position)
-            {
-                _position = position;
-                return _position;
-            }
-            
-            public long Position() => _position;
-            
-            public ISeekableByteChannel Position(long newPosition)
-            {
-                _position = newPosition;
-                return this;
-            }
-            
-            public long Size() => _position;
         }
     }
 }

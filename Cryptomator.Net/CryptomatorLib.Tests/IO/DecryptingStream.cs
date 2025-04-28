@@ -31,10 +31,7 @@ namespace CryptomatorLib.IO
             _leaveOpen = leaveOpen;
             
             // Use the library's AES-CTR implementation
-            using (var supplier = CipherSupplier.AES_CTR.DecryptionCipher(aes.Key, aes.IV))
-            {
-                _decryptor = supplier.Get();
-            }
+            _decryptor = CipherSupplier.AES_CTR.DecryptionCipher(aes.Key, aes.IV);
             
             // Buffer for decryption
             _buffer = new byte[8192]; // Default buffer size

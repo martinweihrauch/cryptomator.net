@@ -17,142 +17,139 @@ namespace CryptomatorLib.Tests.V3
     [TestClass]
     public class FileHeaderCryptorImplTest
     {
-        // Define test data for masterkey creation - same as in Java tests for consistency
+        // Constants aligned with FileNameCryptorImplTest for consistency
+        private static readonly RandomNumberGenerator RandomMock = RandomNumberGenerator.Create(); // Using real RNG for C#
+        private const int TestRevision = -1540072521;
         private static readonly Dictionary<int, byte[]> SEEDS = new Dictionary<int, byte[]>
         {
-            { -1540072521, Convert.FromBase64String("fP4V4oAjsUw5DqackAvLzA0oP1kAQZ0f5YFZQviXSuU=".Replace('-', '+').Replace('_', '/')) }
+            { TestRevision, Convert.FromBase64String("fP4V4oAjsUw5DqackAvLzA0oP1kAQZ0f5YFZQviXSuU=".Replace('-', '+').Replace('_', '/')) }
         };
         private static readonly byte[] KDF_SALT = Convert.FromBase64String("HE4OP-2vyfLLURicF1XmdIIsWv0Zs6MobLKROUIEhQY=".Replace('-', '+').Replace('_', '/'));
-        private static readonly UVFMasterkey MASTERKEY = new UVFMasterkeyImpl(SEEDS, KDF_SALT, -1540072521, -1540072521);
+        // Use RevolvingMasterkey interface type
+        private static readonly RevolvingMasterkey MASTERKEY = new UVFMasterkeyImpl(SEEDS, KDF_SALT, TestRevision, TestRevision);
 
         private FileHeaderCryptorImpl _headerCryptor;
-        private RandomNumberGenerator _random;
 
         [TestInitialize]
         public void Setup()
         {
-            _random = SecureRandomMock.NULL_RANDOM;
-            _headerCryptor = new FileHeaderCryptorImpl(MASTERKEY, _random, -1540072521);
-        }
+            _headerCryptor = new FileHeaderCryptorImpl(MASTERKEY, RandomMock, TestRevision);
 
-        [TestMethod]
-        [DisplayName("Test Create New Header")]
-        public void TestCreateNewHeader()
-        {
-            // Act
-            FileHeader header = _headerCryptor.Create();
-
-            // Assert
-            Assert.IsNotNull(header);
-            Assert.IsInstanceOfType(header, typeof(FileHeaderImpl));
-
-            // Since we're using a deterministic RNG for testing, we should be able to verify
-            // that the header has predictable content
-            var headerImpl = (FileHeaderImpl)header;
-
-            // Verify the seed ID matches our expected value
-            Assert.AreEqual(-1540072521, headerImpl.GetSeedId());
-
-            // Now convert the header to bytes and decrypt it again to verify it's valid
-            Memory<byte> encrypted = _headerCryptor.EncryptHeader(header);
-            FileHeader decrypted = _headerCryptor.DecryptHeader(encrypted);
-
-            // Verify the decrypted header has the same seed ID
-            Assert.AreEqual(headerImpl.GetSeedId(), ((FileHeaderImpl)decrypted).GetSeedId());
-        }
-
-        [TestMethod]
-        [DisplayName("Test Encrypted Decrypted Header Equals Original")]
-        public void TestEncryptedDecryptedHeaderEqualsOriginal()
-        {
-            // First create a header
-            FileHeader header = _headerCryptor.Create();
-
-            // Get the content key from the header (needed for comparison later)
-            DestroyableSecretKey originalKey = new DestroyableSecretKey(((FileHeaderImpl)header).GetContentKey().GetEncoded(), "AES");
-
-            try
-            {
-                // Encrypt the header
-                Memory<byte> encryptedHeader = _headerCryptor.EncryptHeader(header);
-
-                // Decrypt the header
-                FileHeader decryptedHeader = _headerCryptor.DecryptHeader(encryptedHeader);
-
-                // Assert that the decrypted header has the same properties
-                DestroyableSecretKey decryptedKey = ((FileHeaderImpl)decryptedHeader).GetContentKey();
-                Assert.AreEqual(((FileHeaderImpl)header).GetSeedId(), ((FileHeaderImpl)decryptedHeader).GetSeedId());
-
-                // Compare the content key bytes
-                CollectionAssert.AreEqual(originalKey.GetEncoded(), decryptedKey.GetEncoded());
-            }
-            finally
-            {
-                originalKey?.Dispose();
-            }
+            // Note: Java GcmTestHelper.reset is not directly needed/translatable
+            // C# AesGcm is instance-based, avoiding static state issues.
         }
 
         [TestMethod]
         [DisplayName("Test Header Size")]
         public void TestHeaderSize()
         {
-            // Verify that the header size matches the constant in FileHeaderImpl
-            Assert.AreEqual(FileHeaderImpl.SIZE, _headerCryptor.HeaderSize());
+            // Assert HeaderSize() returns the constant size
+            Assert.AreEqual(FileHeaderImpl.SIZE, _headerCryptor.HeaderSize(), "HeaderSize() mismatch");
+
+            // Assert encrypted header length matches the constant size
+            using var headerToEncrypt = _headerCryptor.Create(); // Create uses RNG
+            Memory<byte> encrypted = _headerCryptor.EncryptHeader(headerToEncrypt);
+            Assert.AreEqual(FileHeaderImpl.SIZE, encrypted.Length, "Encrypted header length mismatch");
+        }
+
+        // Skipping Java's testSubkeyGeneration as it tests MASTERKEY directly, not the cryptor.
+
+        [TestMethod]
+        [DisplayName("Test Encryption Matches Java Output")]
+        public void TestEncryption()
+        {
+            // Arrange: Create header with known (zeroed) nonce and content key, matching Java test setup implicitly using NULL_RANDOM
+            // We need to simulate NULL_RANDOM's effect here.
+            byte[] zeroNonce = new byte[FileHeaderImpl.NONCE_LEN]; // 12 bytes
+            byte[] zeroKeyBytes = new byte[FileHeaderImpl.CONTENT_KEY_LEN]; // 32 bytes
+            using DestroyableSecretKey zeroContentKey = new DestroyableSecretKey(zeroKeyBytes, CryptomatorLib.V3.Constants.CONTENT_ENC_ALG); // "AES"
+            using FileHeader header = new FileHeaderImpl(TestRevision, zeroNonce, zeroContentKey);
+
+            // Expected ciphertext from Java test (Base64 decoded)
+            // Java: "dXZmAKQ0W7cAAAAAAAAAAAAAAAA/UGgFA8QGho7E1QTsHWyZIVFqabbGJ/TCwvp3StG0JTkKGj3hwERhnFmZek61Xtc="
+            byte[] expectedCiphertext = Convert.FromBase64String("dXZmAKQ0W7cAAAAAAAAAAAAAAAA/UGgFA8QGho7E1QTsHWyZIVFqabbGJ/TCwvp3StG0JTkKGj3hwERhnFmZek61Xtc=");
+
+            // Act
+            Memory<byte> actualCiphertextMemory = _headerCryptor.EncryptHeader(header);
+
+            // Assert
+            CollectionAssert.AreEqual(expectedCiphertext, actualCiphertextMemory.ToArray(), "Encrypted header does not match expected Java output.");
         }
 
         [TestMethod]
-        [DisplayName("Test Decrypt Header With Invalid Magic Bytes")]
-        public void TestDecryptHeaderWithInvalidMagicBytes()
+        [DisplayName("Test Decryption Matches Java Output")]
+        public void TestDecryption()
         {
-            // Create an encrypted header
-            FileHeader header = _headerCryptor.Create();
-            Memory<byte> encryptedHeader = _headerCryptor.EncryptHeader(header);
+            // Arrange: Ciphertext from Java test
+            byte[] ciphertext = Convert.FromBase64String("dXZmAKQ0W7cAAAAAAAAAAAAAAAA/UGgFA8QGho7E1QTsHWyZIVFqabbGJ/TCwvp3StG0JTkKGj3hwERhnFmZek61Xtc=");
+            ReadOnlyMemory<byte> ciphertextMemory = new ReadOnlyMemory<byte>(ciphertext);
 
-            // Tamper with the magic bytes
-            byte[] tamperedHeader = encryptedHeader.ToArray();
-            tamperedHeader[0] ^= 0xFF; // Flip all bits in the first byte
+            // Expected results (zeroed nonce and key from the specific encryption test)
+            byte[] expectedNonce = new byte[FileHeaderImpl.NONCE_LEN];
+            byte[] expectedKeyBytes = new byte[FileHeaderImpl.CONTENT_KEY_LEN];
 
-            // Attempt to decrypt the tampered header
-            Assert.ThrowsException<ArgumentException>(() =>
-                _headerCryptor.DecryptHeader(new ReadOnlyMemory<byte>(tamperedHeader)));
+            // Act
+            using FileHeader decryptedHeader = _headerCryptor.DecryptHeader(ciphertextMemory);
+
+            // Assert
+            Assert.IsNotNull(decryptedHeader, "Decrypted header should not be null.");
+            Assert.AreEqual(TestRevision, ((FileHeaderImpl)decryptedHeader).GetSeedId(), "Decrypted Seed ID mismatch.");
+            CollectionAssert.AreEqual(expectedNonce, decryptedHeader.GetNonce(), "Decrypted nonce mismatch.");
+
+            // Safely get and compare content key
+            using (DestroyableSecretKey contentKey = ((FileHeaderImpl)decryptedHeader).GetContentKey())
+            {
+                CollectionAssert.AreEqual(expectedKeyBytes, contentKey.GetEncoded(), "Decrypted content key mismatch.");
+            }
         }
 
         [TestMethod]
-        [DisplayName("Test Decrypt Header With Tampered Content")]
-        public void TestDecryptHeaderWithTamperedContent()
+        [DisplayName("Test Decryption With Too Short Header")]
+        public void TestDecryptionWithTooShortHeader()
         {
-            // Create an encrypted header
-            FileHeader header = _headerCryptor.Create();
-            Memory<byte> encryptedHeader = _headerCryptor.EncryptHeader(header);
+            // Arrange: Create ciphertext shorter than required size
+            ReadOnlyMemory<byte> ciphertext = new byte[FileHeaderImpl.SIZE - 1];
 
-            // Tamper with the content (avoid magic bytes at the beginning)
-            byte[] tamperedHeader = encryptedHeader.ToArray();
-            tamperedHeader[V3Constants.UVF_MAGIC_BYTES.Length + 5] ^= 0x01; // Flip one bit in the content
+            // Act & Assert: Expect ArgumentException (or potentially InvalidCiphertextException)
+            var ex = Assert.ThrowsException<ArgumentException>(() =>
+            {
+                _headerCryptor.DecryptHeader(ciphertext);
+            });
+            Assert.IsTrue(ex.Message.Contains("Malformed ciphertext header", StringComparison.OrdinalIgnoreCase), "Exception message mismatch.");
+        }
 
-            // Attempt to decrypt the tampered header
+        [TestMethod]
+        [DisplayName("Test Decryption With Invalid Tag")]
+        public void TestDecryptionWithInvalidTag()
+        {
+            // Arrange: Ciphertext from Java test with last byte modified (affects tag)
+            // Java: "dXZmAKQ0W7cAAAAAAAAAAAAAAAA/UGgFA8QGho7E1QTsHWyZIVFqabbGJ/TCwvp3StG0JTkKGj3hwERhnFmZek61XtX=" (note 'X' instead of 'c')
+            byte[] ciphertextBytes = Convert.FromBase64String("dXZmAKQ0W7cAAAAAAAAAAAAAAAA/UGgFA8QGho7E1QTsHWyZIVFqabbGJ/TCwvp3StG0JTkKGj3hwERhnFmZek61XtX=");
+            ReadOnlyMemory<byte> ciphertext = new ReadOnlyMemory<byte>(ciphertextBytes);
+
+            // Act & Assert: Expect AuthenticationFailedException
             Assert.ThrowsException<AuthenticationFailedException>(() =>
-                _headerCryptor.DecryptHeader(new ReadOnlyMemory<byte>(tamperedHeader)));
+            {
+                _headerCryptor.DecryptHeader(ciphertext);
+            }, "Should throw AuthenticationFailedException for invalid tag.");
         }
 
-        [TestMethod]
-        [DisplayName("Test Decrypt Header With Too Small Size")]
-        public void TestDecryptHeaderWithTooSmallSize()
-        {
-            // Create a too-small buffer for the header
-            byte[] tooSmallHeader = new byte[FileHeaderImpl.SIZE - 1];
-
-            // Attempt to decrypt it
-            Assert.ThrowsException<ArgumentException>(() =>
-                _headerCryptor.DecryptHeader(new ReadOnlyMemory<byte>(tooSmallHeader)));
-        }
 
         [TestMethod]
-        [DisplayName("Test Encrypt Header With Null")]
-        public void TestEncryptHeaderWithNull()
+        [DisplayName("Test Decryption With Invalid Ciphertext")]
+        public void TestDecryptionWithInvalidCiphertext()
         {
-            // Attempt to encrypt a null header
-            Assert.ThrowsException<ArgumentNullException>(() =>
-                _headerCryptor.EncryptHeader(null));
+            // Arrange: Ciphertext from Java test with a byte modified in the encrypted key part
+            // Java: "dXZmAKQ0W7cAAAAAAAAAAAAAAAA/UGgFA8QGho7E1QTsHWyZIVFqabbGJ/XCwvp3StG0JTkKGj3hwERhnFmZek61Xtc=" (note 'X' instead of 'T' near middle)
+            byte[] ciphertextBytes = Convert.FromBase64String("dXZmAKQ0W7cAAAAAAAAAAAAAAAA/UGgFA8QGho7E1QTsHWyZIVFqabbGJ/XCwvp3StG0JTkKGj3hwERhnFmZek61Xtc=");
+            ReadOnlyMemory<byte> ciphertext = new ReadOnlyMemory<byte>(ciphertextBytes);
+
+            // Act & Assert: Expect AuthenticationFailedException
+            // Note: This manipulates the ciphertext itself, which GCM should detect during decryption/tag verification.
+            Assert.ThrowsException<AuthenticationFailedException>(() =>
+           {
+               _headerCryptor.DecryptHeader(ciphertext);
+           }, "Should throw AuthenticationFailedException for invalid ciphertext.");
         }
     }
 }

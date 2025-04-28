@@ -88,6 +88,8 @@ namespace CryptomatorLib.V3
         {
             if (dirId == null)
                 throw new ArgumentNullException(nameof(dirId));
+            if (dirId.Length == 0)
+                throw new ArgumentException("Directory ID must not be empty", nameof(dirId));
 
             byte[] hmacKeyBytes = _hmacKey.GetEncoded();
             Debug.WriteLine($"C# HashDirectoryId - HMAC Key (B64): {Convert.ToBase64String(hmacKeyBytes)}");
@@ -118,7 +120,11 @@ namespace CryptomatorLib.V3
         /// <returns>The encrypted file name</returns>
         public string EncryptFilename(string cleartextName)
         {
-            if (string.IsNullOrEmpty(cleartextName))
+            if (cleartextName == null)
+            {
+                throw new ArgumentNullException(nameof(cleartextName));
+            }
+            if (cleartextName == string.Empty)
             {
                 throw new ArgumentException("File name must not be empty", nameof(cleartextName));
             }
@@ -213,9 +219,13 @@ namespace CryptomatorLib.V3
         /// <returns>The cleartext file name</returns>
         public string DecryptFilename(string ciphertextName)
         {
-            if (string.IsNullOrEmpty(ciphertextName))
+            if (ciphertextName == null)
             {
-                throw new ArgumentException("File name must not be empty", nameof(ciphertextName));
+                throw new ArgumentNullException(nameof(ciphertextName));
+            }
+            if (ciphertextName == string.Empty)
+            {
+                throw new AuthenticationFailedException("Ciphertext must not be empty", new ArgumentException("Input string was empty", nameof(ciphertextName)));
             }
 
             try
@@ -229,16 +239,11 @@ namespace CryptomatorLib.V3
             }
             catch (FormatException ex)
             {
-                throw new InvalidCiphertextException("Invalid Base64 encoding", ex);
+                throw new AuthenticationFailedException("Invalid Base64 encoding", ex);
             }
-            catch (ArgumentException ex)
+            catch (ArgumentException ex) when (ex.ParamName == "ciphertext" || ex.Message.Contains("ciphertext", StringComparison.OrdinalIgnoreCase))
             {
-                // Rethrow argument exceptions related to ciphertext as InvalidCiphertextException
-                if (ex.ParamName == "ciphertext" || ex.Message.Contains("ciphertext", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InvalidCiphertextException(ex.Message, ex);
-                }
-                throw;
+                throw new AuthenticationFailedException("Invalid ciphertext format", ex);
             }
             catch (CryptographicException ex)
             {

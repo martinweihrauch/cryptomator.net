@@ -181,19 +181,24 @@ namespace CryptomatorLib.Common
                     return false;
                 }
 
-                // Decrypt the chunk
-                Memory<byte> decryptedChunk = _contentCryptor.DecryptChunk(
+                // Decrypt the chunk and get the actual number of decrypted bytes
+                int decryptedBytesCount = _contentCryptor.DecryptChunk(
                     new ReadOnlyMemory<byte>(encryptedChunk, 0, bytesRead),
+                    _cleartextBuffer, // Pass the buffer to write into
                     _chunkNumber,
                     _header,
                     _authenticate);
 
-                // Copy to buffer
-                byte[] decryptedArray = decryptedChunk.ToArray();
-                Buffer.BlockCopy(decryptedArray, 0, _cleartextBuffer, 0, decryptedArray.Length);
-
+                // Set buffer limit to the actual number of bytes decrypted
                 _bufferPosition = 0;
-                _bufferLimit = decryptedArray.Length;
+                _bufferLimit = decryptedBytesCount;
+
+                // If bytesRead was less than a full ciphertext chunk, it must be the end of input.
+                if (bytesRead < ciphertextChunkSize)
+                {
+                    _endOfInput = true; // Mark end of input since we didn't read a full chunk
+                }
+
                 _chunkNumber++;
 
                 return true;

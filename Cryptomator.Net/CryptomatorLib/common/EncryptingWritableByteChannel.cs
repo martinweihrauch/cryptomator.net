@@ -15,6 +15,7 @@ namespace CryptomatorLib.Common
         private readonly FileHeader _header;
         private readonly int _cleartextChunkSize;
         private readonly byte[] _cleartextBuffer;
+        private readonly bool _leaveOpen;
         private int _bytesInBuffer = 0;
         private long _chunkNumber = 0;
         private bool _headerWritten = false;
@@ -25,7 +26,8 @@ namespace CryptomatorLib.Common
         /// </summary>
         /// <param name="destination">The destination stream</param>
         /// <param name="cryptor">The cryptor to use</param>
-        public EncryptingWritableByteChannel(Stream destination, Cryptor cryptor)
+        /// <param name="leaveOpen">Whether to leave the destination stream open when this channel is disposed.</param>
+        public EncryptingWritableByteChannel(Stream destination, Cryptor cryptor, bool leaveOpen = false)
         {
             if (destination == null)
                 throw new ArgumentNullException(nameof(destination));
@@ -33,6 +35,7 @@ namespace CryptomatorLib.Common
                 throw new ArgumentNullException(nameof(cryptor));
 
             _destination = destination;
+            _leaveOpen = leaveOpen;
             _contentCryptor = cryptor.FileContentCryptor();
             _headerCryptor = cryptor.FileHeaderCryptor();
             _header = _headerCryptor.Create();
@@ -113,7 +116,11 @@ namespace CryptomatorLib.Common
                     FlushBuffer(true);
                 }
 
-                _destination.Close();
+                // Only close destination if _leaveOpen is false
+                if (!_leaveOpen)
+                {
+                    _destination.Close();
+                }
             }
             finally
             {

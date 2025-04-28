@@ -1,5 +1,6 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using CryptomatorLib.Api;
+using CryptomatorLib.Common;
 using Moq;
 using System;
 using System.IO;
@@ -38,13 +39,23 @@ namespace CryptomatorLib.Tests.Common
                     It.IsAny<long>(),
                     It.IsAny<FileHeader>(),
                     It.IsAny<bool>()))
-                .Callback<ReadOnlyMemory<byte>, Memory<byte>, long, FileHeader, bool>(
+                .Returns<ReadOnlyMemory<byte>, Memory<byte>, long, FileHeader, bool>(
                     (data, output, chunkNumber, header, auth) =>
                     {
                         // Simulate conversion to lowercase for testing purposes
-                        string content = Encoding.UTF8.GetString(data.ToArray());
+                        // Note: This mock assumes the input 'data' size matches the expected cleartext size for the chunk
+                        string content = Encoding.UTF8.GetString(data.Span);
                         byte[] result = Encoding.UTF8.GetBytes(content.ToLower());
-                        result.CopyTo(output);
+
+                        // Ensure output buffer is large enough (Moq might pass a smaller one)
+                        if (output.Length < result.Length)
+                        {
+                            throw new ArgumentException("Mock output buffer too small");
+                        }
+
+                        result.CopyTo(output.Span.Slice(0, result.Length));
+                        // Return the number of bytes written
+                        return result.Length;
                     });
         }
 
@@ -60,7 +71,7 @@ namespace CryptomatorLib.Tests.Common
 
                 // Create decrypting channel - use existing 4-arg constructor with MemoryStream
                 int blockSize = 1024; // Provide block size
-                using (var channel = new TestDecryptingReadableByteChannel(source, (Cryptor)_cryptor.Object, blockSize, true))
+                using (var channel = new DecryptingReadableByteChannel(source, (Cryptor)_cryptor.Object, blockSize, true))
                 {
                     // Read data from the channel
                     int bytesRead1 = channel.Read(resultBuffer, 0, resultBuffer.Length);
@@ -109,7 +120,7 @@ namespace CryptomatorLib.Tests.Common
 
                 // Create decrypting channel - use existing 6-arg random access constructor with MemoryStream
                 int blockSize = 1024; // Provide block size
-                using (var channel = new TestDecryptingReadableByteChannel(source, (Cryptor)_cryptor.Object, blockSize, true, _header.Object, 1))
+                using (var channel = new DecryptingReadableByteChannel(source, (Cryptor)_cryptor.Object, blockSize, true, _header.Object, 1))
                 {
                     // Read data from the channel
                     int bytesRead1 = channel.Read(resultBuffer, 0, resultBuffer.Length);

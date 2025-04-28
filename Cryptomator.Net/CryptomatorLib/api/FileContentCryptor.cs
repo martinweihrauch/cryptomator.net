@@ -69,20 +69,22 @@ namespace CryptomatorLib.Api
         /// <param name="ciphertextChunk">The encrypted chunk</param>
         /// <param name="chunkNumber">The number of the chunk in the stream</param>
         /// <param name="header">The file header</param>
-        /// <param name="authenticate">Whether to authenticate the chunk during decryption</param>
+        /// <param name="authenticate">Whether to authenticate the data</param>
         /// <returns>The decrypted chunk</returns>
-        /// <exception cref="AuthenticationFailedException">If authentication is enabled and the authenticity of the chunk cannot be verified</exception>
+        /// <exception cref="AuthenticationFailedException">If authentication fails</exception>
         Memory<byte> DecryptChunk(ReadOnlyMemory<byte> ciphertextChunk, long chunkNumber, FileHeader header, bool authenticate);
 
         /// <summary>
-        /// Decrypts a chunk of data.
+        /// Decrypts a chunk of data into the provided buffer.
         /// </summary>
-        /// <param name="ciphertextChunk">The encrypted chunk</param>
+        /// <param name="ciphertextChunk">The encrypted chunk data</param>
         /// <param name="cleartextChunk">The buffer to store the decrypted chunk</param>
-        /// <param name="chunkNumber">The number of the chunk in the stream</param>
+        /// <param name="chunkNumber">The chunk number</param>
         /// <param name="header">The file header</param>
-        /// <param name="authenticate">Whether to authenticate the chunk during decryption</param>
-        /// <exception cref="AuthenticationFailedException">If authentication is enabled and the authenticity of the chunk cannot be verified</exception>
-        void DecryptChunk(ReadOnlyMemory<byte> ciphertextChunk, Memory<byte> cleartextChunk, long chunkNumber, FileHeader header, bool authenticate);
+        /// <param name="authenticate">Whether to authenticate the data</param>
+        /// <returns>The number of bytes written to cleartextChunk</returns>
+        /// <exception cref="ArgumentException">If the ciphertext chunk is too small</exception>
+        /// <exception cref="AuthenticationFailedException">If the data fails authentication</exception>
+        int DecryptChunk(ReadOnlyMemory<byte> ciphertextChunk, Memory<byte> cleartextChunk, long chunkNumber, FileHeader header, bool authenticate);
     }
 }

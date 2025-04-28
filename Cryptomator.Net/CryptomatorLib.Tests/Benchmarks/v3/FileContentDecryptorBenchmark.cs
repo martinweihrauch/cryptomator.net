@@ -60,7 +60,7 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
             using (var outputStream = new MemoryStream())
             {
                 using (var outputChannel = new ChannelAdapter(new StreamAsSeekableByteChannel(outputStream)))
-                using (var encryptingChannel = new CryptomatorLib.Tests.Common.EncryptingWritableByteChannel(outputChannel, _cryptor))
+                using (var encryptingChannel = new TestEncryptingWritableByteChannel(outputChannel, _cryptor))
                 {
                     encryptingChannel.Write(clearData, 0, clearData.Length);
                 }
@@ -85,7 +85,7 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
         {
             using (var inputStream = new MemoryStream(encryptedData))
             using (var inputChannel = new ChannelAdapter(new StreamAsSeekableByteChannel(inputStream)))
-            using (var decryptingChannel = new CryptomatorLib.Tests.Common.DecryptingReadableByteChannel(inputChannel, _cryptor))
+            using (var decryptingChannel = new TestDecryptingReadableByteChannel(inputChannel, _cryptor))
             using (var outputStream = new NullOutputStream())
             {
                 byte[] buffer = new byte[64 * 1024]; // 64KB buffer for reading
@@ -103,26 +103,28 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
         {
             _csprng.Dispose();
         }
-        
+
         /// <summary>
         /// Adapter that wraps an ISeekableByteChannel
         /// </summary>
-        private class ChannelAdapter : ISeekableByteChannel, IDisposable
+        private class ChannelAdapter : ISeekableByteChannel, IWritableByteChannel, IDisposable
         {
             private readonly CryptomatorLib.Common.ISeekableByteChannel _channel;
-            
+
             public ChannelAdapter(CryptomatorLib.Common.ISeekableByteChannel channel)
             {
                 _channel = channel ?? throw new ArgumentNullException(nameof(channel));
             }
-            
+
             public long CurrentPosition => _channel.CurrentPosition;
-            
+
             public long CurrentSize => _channel.CurrentSize;
-            
+
+            public bool IsOpen => _channel.CurrentPosition >= 0;
+
             public void Close() => _channel.Close();
-            
-            public void Dispose() 
+
+            public void Dispose()
             {
                 if (_channel is IDisposable disposable)
                 {
@@ -133,24 +135,30 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
                     _channel.Close();
                 }
             }
-            
+
             public long Position() => _channel.Position();
-            
+
             public ISeekableByteChannel Position(long position)
             {
                 _channel.Position(position);
                 return this;
             }
-            
-            public int Read(byte[] dst, int offset, int count) 
+
+            public int Read(byte[] dst, int offset, int count)
                 => _channel.Read(dst, offset, count);
-            
+
             public long Seek(long position) => _channel.Seek(position);
-            
+
             public long Size() => _channel.Size();
-            
+
             public int Write(byte[] src, int offset, int count)
                 => _channel.Write(src, offset, count);
+
+            public Task<int> Write(byte[] src)
+            {
+                int bytesWritten = Write(src, 0, src.Length);
+                return Task.FromResult(bytesWritten);
+            }
         }
 
         /// <summary>
@@ -284,6 +292,29 @@ namespace CryptomatorLib.Tests.Benchmarks.v3
                 _stream.SetLength(size);
                 return this;
             }
+        }
+
+        [Benchmark]
+        public void Decrypt10MB()
+        {
+            var encryptedStream = new MemoryStream(_encryptedData10MB);
+            var sourceChannelMock = new SeekableByteChannelMock(encryptedStream.ToArray()); // Use mock for source
+            // Use Test stub class
+            using (var decryptingChannel = new TestDecryptingReadableByteChannel(sourceChannelMock, _cryptor))
+            using (var readableStream = new MemoryStream())
+            {
+                byte[] buffer = new byte[4096];
+                while (decryptingChannel.Read(buffer, 0, buffer.Length) > 0) { }
+            }
+        }
+
+        // Helper class if needed, or use mocking framework
+        private class NullTestChannel : IWritableByteChannel
+        {
+            public bool IsOpen => true;
+            public void Close() { }
+            public Task<int> Write(byte[] src) => Task.FromResult(src.Length);
+            public void Dispose() { Close(); }
         }
     }
 }

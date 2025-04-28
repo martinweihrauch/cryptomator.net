@@ -21,11 +21,9 @@ namespace CryptomatorLib.Common
             if (key == null) throw new ArgumentNullException(nameof(key));
             if (iv == null) throw new ArgumentNullException(nameof(iv));
 
-            using (var supplier = CipherSupplier.AES_GCM.EncryptionCipher(key, iv))
-            {
-                // The transform will append the authentication tag to the ciphertext
-                return supplier.Get().TransformFinalBlock(data, 0, data.Length);
-            }
+            using var supplier = CipherSupplier.AES_GCM.EncryptionCipher(key, iv);
+            // The transform will append the authentication tag to the ciphertext
+            return supplier.TransformFinalBlock(data, 0, data.Length);
         }
 
         /// <summary>
@@ -41,11 +39,9 @@ namespace CryptomatorLib.Common
             if (key == null) throw new ArgumentNullException(nameof(key));
             if (iv == null) throw new ArgumentNullException(nameof(iv));
 
-            using (var supplier = CipherSupplier.AES_GCM.DecryptionCipher(key, iv))
-            {
-                // The transform will verify the authentication tag
-                return supplier.Get().TransformFinalBlock(data, 0, data.Length);
-            }
+            using var supplier = CipherSupplier.AES_GCM.DecryptionCipher(key, iv);
+            // The transform will verify the authentication tag
+            return supplier.TransformFinalBlock(data, 0, data.Length);
         }
     }
 }
