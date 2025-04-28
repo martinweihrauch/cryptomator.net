@@ -32,7 +32,7 @@ namespace CryptomatorLib.Common
         public MacSupplier(string algorithm)
         {
             _algorithm = algorithm ?? throw new ArgumentNullException(nameof(algorithm));
-            
+
             // Validate that we can create a MAC
             using (CreateMac(new byte[1]))
             {
@@ -50,6 +50,10 @@ namespace CryptomatorLib.Common
             if (key == null)
             {
                 throw new ArgumentNullException(nameof(key));
+            }
+            if (key.Length == 0)
+            {
+                throw new ArgumentException("Key cannot be empty.", nameof(key));
             }
 
             return _algorithm switch
@@ -163,4 +167,4 @@ namespace CryptomatorLib.Common
             return CryptographicOperations.FixedTimeEquals(actualMac, expectedMac);
         }
     }
-} 
+}

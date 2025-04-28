@@ -1,6 +1,5 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using CryptomatorLib.Api;
-using CryptomatorLib.Common;
 using Moq;
 using System;
 using System.IO;
@@ -59,11 +58,9 @@ namespace CryptomatorLib.Tests.Common
             {
                 byte[] resultBuffer = new byte[30];
 
-                // Create a channel adapter
-                var channelAdapter = new StreamTestByteChannel(source);
-
-                // Create decrypting channel
-                using (var channel = new DecryptingReadableByteChannel(channelAdapter, _cryptor.Object))
+                // Create decrypting channel - use existing 4-arg constructor with MemoryStream
+                int blockSize = 1024; // Provide block size
+                using (var channel = new TestDecryptingReadableByteChannel(source, (Cryptor)_cryptor.Object, blockSize, true))
                 {
                     // Read data from the channel
                     int bytesRead1 = channel.Read(resultBuffer, 0, resultBuffer.Length);
@@ -87,10 +84,17 @@ namespace CryptomatorLib.Tests.Common
             _contentCryptor.Verify(c => c.DecryptChunk(
                 It.IsAny<ReadOnlyMemory<byte>>(),
                 It.IsAny<Memory<byte>>(),
-                It.IsAny<long>(),
-                It.IsAny<FileHeader>(),
-                It.IsAny<bool>()),
-                Times.AtLeastOnce);
+                It.Is<long>(chunkNum => chunkNum == 0),
+                It.Is<FileHeader>(h => h == _header.Object),
+                It.Is<bool>(auth => auth == true)),
+                Times.Once); // Verify first chunk
+            _contentCryptor.Verify(c => c.DecryptChunk(
+                It.IsAny<ReadOnlyMemory<byte>>(),
+                It.IsAny<Memory<byte>>(),
+                It.Is<long>(chunkNum => chunkNum == 1),
+                It.Is<FileHeader>(h => h == _header.Object),
+                It.Is<bool>(auth => auth == true)),
+                Times.Once); // Verify second chunk
         }
 
         [TestMethod]
@@ -103,11 +107,9 @@ namespace CryptomatorLib.Tests.Common
             {
                 byte[] resultBuffer = new byte[30];
 
-                // Create a channel adapter
-                var channelAdapter = new StreamTestByteChannel(source);
-
-                // Create decrypting channel
-                using (var channel = new DecryptingReadableByteChannel(channelAdapter, _cryptor.Object))
+                // Create decrypting channel - use existing 6-arg random access constructor with MemoryStream
+                int blockSize = 1024; // Provide block size
+                using (var channel = new TestDecryptingReadableByteChannel(source, (Cryptor)_cryptor.Object, blockSize, true, _header.Object, 1))
                 {
                     // Read data from the channel
                     int bytesRead1 = channel.Read(resultBuffer, 0, resultBuffer.Length);
@@ -127,14 +129,14 @@ namespace CryptomatorLib.Tests.Common
             }
 
             // Verify the expected method calls
-            _headerCryptor.Verify(h => h.DecryptHeader(It.IsAny<ReadOnlyMemory<byte>>()), Times.AtLeastOnce);
+            _headerCryptor.Verify(h => h.DecryptHeader(It.IsAny<ReadOnlyMemory<byte>>()), Times.Never); // Header provided, shouldn't be decrypted again
             _contentCryptor.Verify(c => c.DecryptChunk(
                 It.IsAny<ReadOnlyMemory<byte>>(),
                 It.IsAny<Memory<byte>>(),
-                It.IsAny<long>(),
-                It.IsAny<FileHeader>(),
-                It.IsAny<bool>()),
-                Times.AtLeastOnce);
+                It.Is<long>(chunkNum => chunkNum == 1),
+                It.Is<FileHeader>(h => h == _header.Object),
+                It.Is<bool>(auth => auth == true)),
+                Times.Once); // Verify only chunk 1 is decrypted
         }
     }
 }

@@ -4,6 +4,15 @@
 
 Cryptomator.Net is a C# implementation of the Cryptomator library, providing secure client-side encryption for cloud storage. The library follows the Universal Vault Format (UVF) specification and provides APIs for file name encryption, file content encryption, and key management.
 
+<span style="color:red">!! WARNING !!</span>
+
+Disclaimer
+The provided C# code was semi-automatically translated from the original Java implementation and may contain serious cryptographic flaws or errors.
+This project is distributed under the MIT License and is intended for educational and experimental purposes only.
+It is strongly advised not to use this C# implementation in production environments or for securing sensitive information without conducting a thorough and independent review.
+
+Under no circumstances shall the authors or contributors be held liable for any damages, losses (including but not limited to financial, data, health, or other types of harm) resulting from the use of this software.
+
 ## Getting Started
 
 ### Installation

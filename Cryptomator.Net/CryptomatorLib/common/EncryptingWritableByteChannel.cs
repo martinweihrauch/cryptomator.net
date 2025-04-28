@@ -100,14 +100,15 @@ namespace CryptomatorLib.Common
 
             try
             {
+                bool headerWasWritten = _headerWritten;
                 // Write header if not written yet
-                if (!_headerWritten)
+                if (!headerWasWritten)
                 {
                     WriteHeader();
                 }
 
-                // Flush remaining bytes if any
-                if (_bytesInBuffer > 0)
+                // Flush remaining bytes if any, OR flush an empty chunk if this is the very first chunk (empty file case)
+                if (_bytesInBuffer > 0 || !headerWasWritten) // If buffer has data OR header was just written (meaning no data ever came)
                 {
                     FlushBuffer(true);
                 }

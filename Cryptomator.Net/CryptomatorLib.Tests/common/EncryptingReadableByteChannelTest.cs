@@ -32,6 +32,7 @@ namespace CryptomatorLib.Tests.Common
             _cryptor.Setup(c => c.FileHeaderCryptor()).Returns(_headerCryptor.Object);
 
             _contentCryptor.Setup(c => c.CleartextChunkSize()).Returns(10);
+            _contentCryptor.Setup(c => c.CiphertextChunkSize()).Returns(20);
 
             _headerCryptor.Setup(h => h.Create()).Returns(_header.Object);
             _headerCryptor.Setup(h => h.EncryptHeader(_header.Object)).Returns(new Memory<byte>(Encoding.UTF8.GetBytes("hhhhh")));

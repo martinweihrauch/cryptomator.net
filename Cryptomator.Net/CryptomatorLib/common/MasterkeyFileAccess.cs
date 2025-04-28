@@ -3,6 +3,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using CryptomatorLib.Api;
+using Org.BouncyCastle.Crypto.Generators;
 
 namespace CryptomatorLib.Common
 {
@@ -170,6 +171,7 @@ namespace CryptomatorLib.Common
                 byte[] passphraseDerivedKey = DerivePassphraseKey(
                     Encoding.UTF8.GetBytes(passphrase),
                     nonce,
+                    null,
                     costParam,
                     blockSize,
                     parallelism);
@@ -207,7 +209,7 @@ namespace CryptomatorLib.Common
         /// <param name="passphrase">The passphrase</param>
         /// <returns>The raw masterkey</returns>
         /// <exception cref="InvalidPassphraseException">If the passphrase is incorrect</exception>
-        public static byte[] LoadRawMasterkey(MasterkeyFile masterkeyFile, string passphrase)
+        public static PerpetualMasterkey LoadRawMasterkey(MasterkeyFile masterkeyFile, string passphrase)
         {
             if (masterkeyFile == null)
             {
@@ -234,6 +236,7 @@ namespace CryptomatorLib.Common
             byte[] passphraseDerivedKey = DerivePassphraseKey(
                 Encoding.UTF8.GetBytes(passphrase),
                 nonce,
+                null,
                 masterkeyFile.ScryptCostParam,
                 masterkeyFile.ScryptBlockSize,
                 masterkeyFile.ScryptParallelism);
@@ -252,7 +255,8 @@ namespace CryptomatorLib.Common
 
                 if (!CryptographicOperations.FixedTimeEquals(expectedMac, calculatedMac))
                 {
-                    throw new InvalidPassphraseException("Incorrect passphrase");
+                    // Throw InvalidCredentialException to match test expectation
+                    throw new InvalidCredentialException("Incorrect passphrase or pepper");
                 }
 
                 // Decrypt masterkey
@@ -264,21 +268,34 @@ namespace CryptomatorLib.Common
             }
         }
 
-        private static byte[] DerivePassphraseKey(byte[] passphraseBytes, byte[] salt, int costParamLogN, int blockSize, int parallelism)
+        private static byte[] DerivePassphraseKey(byte[] passphraseBytes, byte[] salt, byte[]? pepper, int costParamN_or_LogN, int blockSize, int parallelism)
         {
-            // Assume default parallelism p=1, as the public Scrypt method doesn't take it
-            if (parallelism != 1)
+            // Combine salt and pepper (if pepper is provided)
+            int pepperLength = pepper?.Length ?? 0;
+            byte[] combinedSalt = new byte[salt.Length + pepperLength];
+            Buffer.BlockCopy(salt, 0, combinedSalt, 0, salt.Length);
+            if (pepper != null)
             {
-                // Or handle differently if p!=1 is needed
-                throw new ArgumentOutOfRangeException(nameof(parallelism), "Current Scrypt implementation only supports p=1.");
+                Buffer.BlockCopy(pepper, 0, combinedSalt, salt.Length, pepper.Length);
             }
 
-            string passphraseString = Encoding.UTF8.GetString(passphraseBytes);
-            int costParamN = 1 << costParamLogN; // Convert logN to N
+            // !! Correction: Java code passes N directly, not logN !!
+            // Do NOT convert costParamN_or_LogN assuming it's logN.
+            // Pass it directly as the N parameter to BouncyCastle.
+            // int costParamN = 1 << costParamN_or_LogN; 
+            int costParamN = costParamN_or_LogN; // Use the value directly as N
             int derivedKeyLength = KEY_LEN_BYTES + MAC_LEN_BYTES; // 64 bytes
 
-            // Call the public method with string password, N, r, dkLen
-            return Scrypt.ScryptDeriveBytes(passphraseString, salt, costParamN, blockSize, derivedKeyLength);
+            try
+            {
+                // Use BouncyCastle's SCrypt implementation with the correct N value
+                return SCrypt.Generate(passphraseBytes, combinedSalt, costParamN, blockSize, parallelism, derivedKeyLength);
+            }
+            finally
+            {
+                // Clear combined salt
+                CryptographicOperations.ZeroMemory(combinedSalt);
+            }
         }
 
         private static byte[] EncryptMasterkey(byte[] masterkey, byte[] kek)
@@ -287,16 +304,19 @@ namespace CryptomatorLib.Common
             return AesKeyWrap.Wrap(kek, masterkey);
         }
 
-        private static byte[] DecryptMasterkey(byte[] encryptedMasterkey, byte[] kek)
+        private static PerpetualMasterkey DecryptMasterkey(byte[] encryptedMasterkey, byte[] kek)
         {
             try
             {
                 // Use AES key unwrapping as specified in RFC 3394
-                return AesKeyWrap.Unwrap(kek, encryptedMasterkey);
+                byte[] decryptedKey = AesKeyWrap.Unwrap(kek, encryptedMasterkey);
+                // Wrap the decrypted key in a PerpetualMasterkey object
+                return new PerpetualMasterkey(decryptedKey);
             }
             catch (CryptographicException)
             {
-                throw new InvalidPassphraseException("Incorrect passphrase");
+                // Also throw InvalidCredentialException here to match tests
+                throw new InvalidCredentialException("Incorrect passphrase or pepper during decryption");
             }
         }
 
@@ -315,8 +335,20 @@ namespace CryptomatorLib.Common
         /// <returns>The vault version</returns>
         public static int ReadAllegedVaultVersion(byte[] masterkey)
         {
-            var masterkeyFile = MasterkeyFile.FromJson(masterkey);
-            return masterkeyFile.VaultVersion;
+            // Deserialize using System.Text.Json
+            try
+            {
+                var masterkeyFile = System.Text.Json.JsonSerializer.Deserialize<MasterkeyFile>(masterkey);
+                // Check for null before accessing VaultVersion
+                return masterkeyFile?.VaultVersion ?? 0; // Return 0 or throw if null is invalid?
+            }
+            catch (System.Text.Json.JsonException ex)
+            {
+                // Wrap exception for consistency?
+                throw new IOException("Invalid masterkey file format (JSON parsing failed)", ex);
+            }
+            // var masterkeyFile = MasterkeyFile.FromJson(masterkey); // Old way?
+            // return masterkeyFile.VaultVersion;
         }
 
         /// <summary>
@@ -388,22 +420,124 @@ namespace CryptomatorLib.Common
             {
                 throw new ArgumentNullException(nameof(masterkeyFile));
             }
-
             if (string.IsNullOrEmpty(passphrase))
             {
-                throw new ArgumentException("Invalid passphrase", nameof(passphrase));
+                throw new ArgumentException("Passphrase cannot be empty", nameof(passphrase));
             }
+
+            // Validate required fields based on Java test setup/hardcoded Lock
+            if (masterkeyFile.ScryptSalt == null ||
+                masterkeyFile.EncMasterKey == null ||
+                masterkeyFile.MacMasterKey == null)
+            // PrimaryMasterkeyNonce and PrimaryMasterkeyMac are not set by hardcoded Lock
+            // VersionMac is also set but not needed for unlock
+            {
+                throw new IOException("Invalid masterkey file format (missing required fields for unlock based on Java test setup)");
+            }
+
+            // Get values set by hardcoded Lock
+            byte[] salt = masterkeyFile.ScryptSalt;
+            byte[] wrappedEncKey = masterkeyFile.EncMasterKey;
+            byte[] wrappedMacKey = masterkeyFile.MacMasterKey;
+
+            byte[] passphraseDerivedKey = Array.Empty<byte>();
+            byte[] kek = new byte[KEY_LEN_BYTES];
+            byte[] encKeyBytes = Array.Empty<byte>();
+            byte[] macKeyBytes = Array.Empty<byte>();
+            byte[] combinedKeyBytes = new byte[KEY_LEN_BYTES + MAC_LEN_BYTES];
 
             try
             {
-                // Implement unlock logic here based on MasterkeyFileAccess.java
-                // For tests, just return a dummy key
-                return new PerpetualMasterkey(new byte[64]);
+                // Derive key-encryption key (KEK) from passphrase, salt, pepper
+                passphraseDerivedKey = DerivePassphraseKey(
+                    Encoding.UTF8.GetBytes(passphrase),
+                    salt,
+                    this._pepper, // Use instance pepper
+                    masterkeyFile.ScryptCostParam,
+                    masterkeyFile.ScryptBlockSize,
+                    1); // Parallelism default = 1
+
+                // Use only the KEK part for unwrapping (first KEY_LEN_BYTES)
+                // Note: Unlike previous C# version, we don't use the second half (MAC key) derived here.
+                Buffer.BlockCopy(passphraseDerivedKey, 0, kek, 0, KEY_LEN_BYTES);
+
+                // Unwrap (decrypt) both keys using the KEK
+                encKeyBytes = AesKeyWrap.Unwrap(kek, wrappedEncKey);
+                macKeyBytes = AesKeyWrap.Unwrap(kek, wrappedMacKey);
+
+                // Combine decrypted keys
+                Buffer.BlockCopy(encKeyBytes, 0, combinedKeyBytes, 0, encKeyBytes.Length);
+                Buffer.BlockCopy(macKeyBytes, 0, combinedKeyBytes, encKeyBytes.Length, macKeyBytes.Length);
+
+                // Return PerpetualMasterkey created from combined bytes
+                return new PerpetualMasterkey(combinedKeyBytes);
             }
-            catch (Exception ex)
+            catch (CryptographicException ex)
             {
-                throw new InvalidCredentialException("Invalid passphrase", ex);
+                // If unwrapping fails, likely wrong password/pepper
+                throw new InvalidCredentialException("Incorrect passphrase or pepper during key unwrapping", ex);
             }
+            finally
+            {
+                // Clear sensitive byte arrays
+                CryptographicOperations.ZeroMemory(passphraseDerivedKey);
+                CryptographicOperations.ZeroMemory(kek);
+                CryptographicOperations.ZeroMemory(encKeyBytes);
+                CryptographicOperations.ZeroMemory(macKeyBytes);
+                CryptographicOperations.ZeroMemory(combinedKeyBytes);
+            }
+
+            /* // Keep old implementation commented out for reference
+            // Validate required fields are present - Use EncMasterKey now
+            if (masterkeyFile.ScryptSalt == null ||
+                masterkeyFile.EncMasterKey == null || // Check EncMasterKey (JSON: "primaryMasterKey")
+                masterkeyFile.PrimaryMasterkeyNonce == null ||
+                masterkeyFile.PrimaryMasterkeyMac == null)
+            {
+                throw new IOException("Invalid masterkey file format (missing required fields)");
+            }
+
+            // Decode base64 values - Use EncMasterKey now
+            byte[] salt = masterkeyFile.ScryptSalt; 
+            byte[] encryptedMasterkey = Convert.FromBase64String(masterkeyFile.EncMasterKey); // Use EncMasterKey
+            byte[] nonce = Convert.FromBase64String(masterkeyFile.PrimaryMasterkeyNonce);
+            byte[] expectedMac = Convert.FromBase64String(masterkeyFile.PrimaryMasterkeyMac);
+
+            // Derive key from passphrase using instance method
+            byte[] passphraseDerivedKey = DerivePassphraseKey(
+                Encoding.UTF8.GetBytes(passphrase),
+                salt,
+                this._pepper,
+                masterkeyFile.ScryptCostParam,
+                masterkeyFile.ScryptBlockSize,
+                masterkeyFile.ScryptParallelism);
+
+            try
+            {
+                // Split derived key
+                byte[] kek = new byte[KEY_LEN_BYTES];
+                byte[] macKey = new byte[MAC_LEN_BYTES];
+
+                Buffer.BlockCopy(passphraseDerivedKey, 0, kek, 0, KEY_LEN_BYTES);
+                Buffer.BlockCopy(passphraseDerivedKey, KEY_LEN_BYTES, macKey, 0, MAC_LEN_BYTES);
+
+                // Verify MAC
+                byte[] calculatedMac = CalculateMac(macKey, encryptedMasterkey);
+
+                if (!CryptographicOperations.FixedTimeEquals(expectedMac, calculatedMac))
+                {
+                    // Throw InvalidCredentialException to match test expectation
+                    throw new InvalidCredentialException("Incorrect passphrase or pepper");
+                }
+
+                // Decrypt masterkey
+                return DecryptMasterkey(encryptedMasterkey, kek);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(passphraseDerivedKey);
+            }
+            */
         }
 
         /// <summary>
@@ -411,8 +545,8 @@ namespace CryptomatorLib.Common
         /// </summary>
         /// <param name="masterkey">The masterkey to encrypt</param>
         /// <param name="passphrase">The passphrase to use</param>
-        /// <param name="vaultVersion">The vault version</param>
-        /// <param name="scryptCostParam">The scrypt cost parameter</param>
+        /// <param name="vaultVersion">The vault version (Note: potentially deprecated)</param>
+        /// <param name="scryptCostParam">The scrypt cost parameter (N value, must be power of 2 > 1)</param>
         /// <returns>An encrypted masterkey file</returns>
         public MasterkeyFile Lock(PerpetualMasterkey masterkey, string passphrase, int vaultVersion, int scryptCostParam)
         {
@@ -420,27 +554,104 @@ namespace CryptomatorLib.Common
             {
                 throw new ArgumentNullException(nameof(masterkey));
             }
-
+            // Restore check
+            if (masterkey.IsDestroyed())
+            {
+                throw new ArgumentException("Masterkey has been destroyed", nameof(masterkey));
+            }
             if (string.IsNullOrEmpty(passphrase))
             {
                 throw new ArgumentException("Invalid passphrase", nameof(passphrase));
             }
-
-            // Create a new masterkey file
-            var masterkeyFile = new MasterkeyFile
+            // Add validation for scryptCostParam (N)
+            if (scryptCostParam < 2 || (scryptCostParam & (scryptCostParam - 1)) != 0)
             {
-                Version = 3,
-                ScryptSalt = new byte[8],
-                ScryptCostParam = scryptCostParam,
-                ScryptBlockSize = SCRYPT_BLOCK_SIZE_DEFAULT,
-                VaultVersion = vaultVersion,
-                // Mock values for tests
-                EncMasterKey = Convert.FromBase64String("mM+qoQ+o0qvPTiDAZYt+flaC3WbpNAx1sTXaUzxwpy0M9Ctj6Tih/Q=="),
-                MacMasterKey = Convert.FromBase64String("mM+qoQ+o0qvPTiDAZYt+flaC3WbpNAx1sTXaUzxwpy0M9Ctj6Tih/Q=="),
-                VersionMac = Convert.FromBase64String("iUmRRHITuyJsJbVNqGNw+82YQ4A3Rma7j/y1v0DCVLA=")
-            };
+                throw new ArgumentException("scryptCostParam (N) must be > 1 and a power of 2.", nameof(scryptCostParam));
+            }
 
+            // Restore functional Lock implementation using BouncyCastle
+            byte[] salt = new byte[NONCE_LEN_BYTES]; // Use constant for length
+            _random.GetBytes(salt); // Use instance RNG
+
+            // Get combined key and split it
+            byte[] rawCombinedKey = masterkey.GetRaw();
+            byte[] rawEncKey = new byte[KEY_LEN_BYTES];
+            byte[] rawMacKey = new byte[MAC_LEN_BYTES];
+            Buffer.BlockCopy(rawCombinedKey, 0, rawEncKey, 0, KEY_LEN_BYTES);
+            Buffer.BlockCopy(rawCombinedKey, KEY_LEN_BYTES, rawMacKey, 0, MAC_LEN_BYTES);
+            byte[] passphraseBytes = Encoding.UTF8.GetBytes(passphrase);
+            byte[] passphraseDerivedKey = Array.Empty<byte>();
+            byte[] kek = new byte[KEY_LEN_BYTES];
+            byte[] wrappedEncKey = Array.Empty<byte>();
+            byte[] wrappedMacKey = Array.Empty<byte>();
+            byte[] versionMac = Array.Empty<byte>(); // Need to calculate this
+
+            try
+            {
+                // Derive key-encryption key (KEK) from passphrase
+                // Note: DerivePassphraseKey expects N, not logN, based on previous fix.
+                passphraseDerivedKey = DerivePassphraseKey(
+                   passphraseBytes,
+                   salt,
+                   this._pepper, // Use instance pepper
+                   scryptCostParam, // Pass N directly
+                   SCRYPT_BLOCK_SIZE_DEFAULT,
+                   SCRYPT_PARALLELIZATION_DEFAULT);
+
+                // Use only the first part as KEK for wrapping
+                Buffer.BlockCopy(passphraseDerivedKey, 0, kek, 0, KEY_LEN_BYTES);
+
+                // Wrap keys using AES Key Wrap (BouncyCastle via AesKeyWrap class)
+                wrappedEncKey = AesKeyWrap.Wrap(kek, rawEncKey);
+                wrappedMacKey = AesKeyWrap.Wrap(kek, rawMacKey);
+
+                // Calculate Version MAC (HMAC-SHA256 of vaultVersion using the raw MAC key)
+                using (var hmac = new HMACSHA256(rawMacKey))
+                {
+                    // Convert vaultVersion int to big-endian byte array
+                    byte[] versionBytes = BitConverter.GetBytes(vaultVersion);
+                    if (BitConverter.IsLittleEndian)
+                    {
+                        Array.Reverse(versionBytes);
+                    }
+                    versionMac = hmac.ComputeHash(versionBytes);
+                }
+
+                // Create the masterkey file DTO
+                var masterkeyFileDto = new MasterkeyFile
+                {
+                    ScryptSalt = salt,
+                    ScryptCostParam = scryptCostParam,
+                    ScryptBlockSize = SCRYPT_BLOCK_SIZE_DEFAULT,
+                    ScryptParallelism = SCRYPT_PARALLELIZATION_DEFAULT, // Not stored in standard Java file
+
+                    EncMasterKey = wrappedEncKey, // Store raw bytes, assuming JSON serialization handles Base64
+                    MacMasterKey = wrappedMacKey,
+                    VersionMac = versionMac,
+
+                    // Use correct property name "Version" (capital V)
+                    Version = vaultVersion
+                };
+
+                return masterkeyFileDto;
+            }
+            finally
+            {
+                // Clear sensitive byte arrays
+                CryptographicOperations.ZeroMemory(rawCombinedKey); // Clear combined key
+                CryptographicOperations.ZeroMemory(rawEncKey);
+                CryptographicOperations.ZeroMemory(rawMacKey);
+                CryptographicOperations.ZeroMemory(passphraseBytes);
+                CryptographicOperations.ZeroMemory(passphraseDerivedKey);
+                CryptographicOperations.ZeroMemory(kek);
+                // Don't clear salt, wrapped keys, or versionMac as they are returned.
+            }
+
+            /* // Old hardcoded implementation
+            var masterkeyFile = new MasterkeyFile
+            { ... };
             return masterkeyFile;
+            */
         }
 
         /// <summary>

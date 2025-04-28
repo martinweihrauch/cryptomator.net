@@ -66,7 +66,7 @@ namespace CryptomatorLib.Common
         /// <param name="dst">The destination buffer</param>
         /// <param name="offset">The offset in the buffer at which to start storing bytes</param>
         /// <param name="count">The maximum number of bytes to read</param>
-        /// <returns>The number of bytes read, or -1 if there is no more data</returns>
+        /// <returns>The number of bytes read, or 0 if there is no more data</returns>
         public int Read(byte[] dst, int offset, int count)
         {
             ThrowIfDisposed();
@@ -81,7 +81,7 @@ namespace CryptomatorLib.Common
                 throw new ArgumentException("The sum of offset and count is greater than the buffer length");
 
             if (_endOfInput)
-                return -1;
+                return 0;
 
             // Read the header if not already read
             if (!_headerRead)
@@ -113,7 +113,7 @@ namespace CryptomatorLib.Common
                 remaining -= bytesToCopy;
             }
 
-            return totalBytesRead > 0 ? totalBytesRead : -1;
+            return totalBytesRead;
         }
 
         /// <summary>

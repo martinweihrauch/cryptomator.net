@@ -16,7 +16,17 @@ namespace CryptomatorLib.Common
         /// <summary>
         /// Gets the algorithm name associated with this key.
         /// </summary>
-        public string Algorithm => _algorithm;
+        public string Algorithm
+        {
+            get
+            {
+                if (_destroyed)
+                {
+                    throw new InvalidOperationException("Key has been destroyed.");
+                }
+                return _algorithm;
+            }
+        }
 
         /// <summary>
         /// Checks if the key has been destroyed.
@@ -31,9 +41,10 @@ namespace CryptomatorLib.Common
         public DestroyableSecretKey(byte[] keyMaterial, string algorithm)
         {
             if (keyMaterial == null) throw new ArgumentNullException(nameof(keyMaterial));
+            if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
             _keyMaterial = new byte[keyMaterial.Length];
             Buffer.BlockCopy(keyMaterial, 0, _keyMaterial, 0, keyMaterial.Length);
-            _algorithm = algorithm ?? string.Empty;
+            _algorithm = algorithm;
             _destroyed = false;
         }
 
@@ -47,12 +58,13 @@ namespace CryptomatorLib.Common
         public DestroyableSecretKey(byte[] keyMaterial, int offset, int length, string algorithm)
         {
             if (keyMaterial == null) throw new ArgumentNullException(nameof(keyMaterial));
+            if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
             if (offset < 0 || length < 0 || offset + length > keyMaterial.Length)
                 throw new ArgumentOutOfRangeException("Invalid offset or length.");
 
             _keyMaterial = new byte[length];
             Buffer.BlockCopy(keyMaterial, offset, _keyMaterial, 0, length);
-            _algorithm = algorithm ?? string.Empty;
+            _algorithm = algorithm;
             _destroyed = false;
         }
 

@@ -13,48 +13,63 @@ namespace CryptomatorLib.Tests.Common
     [TestClass]
     public class MasterkeyFileAccessTest
     {
-        private static readonly RandomNumberGenerator RANDOM_MOCK = SecureRandomMock.NULL_RANDOM;
+        // Constants for scrypt parameters matching Java test setup (N=4, r=8, p=1)
+        private const int SCRYPT_N_TEST = 4; // Java test used costParam=2, which meant N=2. Correcting to N=4 (2^2) for valid param.
+        private const int SCRYPT_R_TEST = 8;
+        private const int SCRYPT_P_TEST = 1;
+        private const int VAULT_VERSION_TEST = 3; // Matches Java test
+
+        // Use a real RNG for functional tests
+        // private static readonly RandomNumberGenerator RANDOM_MOCK = SecureRandomMock.NULL_RANDOM;
+        private static readonly RandomNumberGenerator REAL_RANDOM = RandomNumberGenerator.Create();
         private static readonly byte[] DEFAULT_PEPPER = new byte[0];
 
         private PerpetualMasterkey _key;
-        private MasterkeyFile _keyFile;
         private MasterkeyFileAccess _masterkeyFileAccess;
 
         [TestInitialize]
         public void Setup()
         {
             _key = new PerpetualMasterkey(new byte[64]);
-            _keyFile = new MasterkeyFile();
-            _masterkeyFileAccess = new MasterkeyFileAccess(DEFAULT_PEPPER, RANDOM_MOCK);
-
-            _keyFile.Version = 3;
-            _keyFile.ScryptSalt = new byte[8];
-            _keyFile.ScryptCostParam = 2;
-            _keyFile.ScryptBlockSize = 8;
-            _keyFile.EncMasterKey = Convert.FromBase64String("mM+qoQ+o0qvPTiDAZYt+flaC3WbpNAx1sTXaUzxwpy0M9Ctj6Tih/Q==");
-            _keyFile.MacMasterKey = Convert.FromBase64String("mM+qoQ+o0qvPTiDAZYt+flaC3WbpNAx1sTXaUzxwpy0M9Ctj6Tih/Q==");
-            _keyFile.VersionMac = Convert.FromBase64String("iUmRRHITuyJsJbVNqGNw+82YQ4A3Rma7j/y1v0DCVLA=");
+            // Use REAL_RANDOM
+            _masterkeyFileAccess = new MasterkeyFileAccess(DEFAULT_PEPPER, REAL_RANDOM);
         }
 
         [TestMethod]
         [DisplayName("Test Change Passphrase With MasterkeyFile")]
         public void TestChangePassphraseWithMasterkeyFile()
         {
-            MasterkeyFile changed1 = _masterkeyFileAccess.ChangePassphrase(_keyFile, "asd", "qwe");
+            // Arrange: Lock a key first to get a valid MasterkeyFile
+            var lockedKeyFile = _masterkeyFileAccess.Lock(_key, "asd", VAULT_VERSION_TEST, SCRYPT_N_TEST);
+
+            // Act
+            MasterkeyFile changed1 = _masterkeyFileAccess.ChangePassphrase(lockedKeyFile, "asd", "qwe");
             MasterkeyFile changed2 = _masterkeyFileAccess.ChangePassphrase(changed1, "qwe", "asd");
 
-            CollectionAssert.AreNotEqual(_keyFile.EncMasterKey, changed1.EncMasterKey);
-            CollectionAssert.AreEqual(_keyFile.EncMasterKey, changed2.EncMasterKey);
+            // Assert: Check that keys are different after first change, and equal after second change
+            CollectionAssert.AreNotEqual(lockedKeyFile.EncMasterKey, changed1.EncMasterKey);
+            CollectionAssert.AreNotEqual(lockedKeyFile.MacMasterKey, changed1.MacMasterKey);
+            // Salt should change
+            CollectionAssert.AreNotEqual(lockedKeyFile.ScryptSalt, changed1.ScryptSalt);
+
+            // After changing back, the wrapped keys should be different (due to different salt)
+            // but unlocking both lockedKeyFile and changed2 with "asd" should yield the original key.
+            CollectionAssert.AreNotEqual(lockedKeyFile.EncMasterKey, changed2.EncMasterKey);
+            CollectionAssert.AreNotEqual(lockedKeyFile.MacMasterKey, changed2.MacMasterKey);
+            CollectionAssert.AreNotEqual(lockedKeyFile.ScryptSalt, changed2.ScryptSalt);
+
+            // Verify unlock works for both
+            using var originalKey = _masterkeyFileAccess.Unlock(lockedKeyFile, "asd");
+            using var changedBackKey = _masterkeyFileAccess.Unlock(changed2, "asd");
+            CollectionAssert.AreEqual(originalKey.GetRaw(), changedBackKey.GetRaw());
         }
 
         [TestMethod]
         [DisplayName("Test Read Alleged Vault Version")]
         public void TestReadAllegedVaultVersion()
         {
-            byte[] content = Encoding.UTF8.GetBytes("{\"version\": 1337}");
-
+            byte[] content = Encoding.UTF8.GetBytes("{\"vaultVersion\": 1337}");
             int version = MasterkeyFileAccess.ReadAllegedVaultVersion(content);
-
             Assert.AreEqual(1337, version);
         }
 
@@ -69,11 +84,13 @@ namespace CryptomatorLib.Tests.Common
             public void Setup()
             {
                 _key = new PerpetualMasterkey(new byte[64]);
-                _masterkeyFileAccess = new MasterkeyFileAccess(new byte[0], SecureRandomMock.NULL_RANDOM);
+                // Use REAL_RANDOM here too
+                _masterkeyFileAccess = new MasterkeyFileAccess(DEFAULT_PEPPER, REAL_RANDOM);
 
                 using (MemoryStream out1 = new MemoryStream())
                 {
-                    _masterkeyFileAccess.Persist(_key, out1, "asd", 999, 2);
+                    // Persist now uses the functional Lock method
+                    _masterkeyFileAccess.Persist(_key, out1, "asd", MasterkeyFileAccessTest.VAULT_VERSION_TEST, MasterkeyFileAccessTest.SCRYPT_N_TEST);
                     _serializedKeyFile = out1.ToArray();
                 }
             }
@@ -86,7 +103,11 @@ namespace CryptomatorLib.Tests.Common
                 byte[] restored = _masterkeyFileAccess.ChangePassphrase(changed, "qwe", "asd");
 
                 CollectionAssert.AreNotEqual(changed, _serializedKeyFile);
-                CollectionAssert.AreEqual(_serializedKeyFile, restored);
+
+                // Verify unlocking works for both
+                using var originalKey = _masterkeyFileAccess.Load(new MemoryStream(_serializedKeyFile), "asd");
+                using var restoredKey = _masterkeyFileAccess.Load(new MemoryStream(restored), "asd");
+                CollectionAssert.AreEqual(originalKey.GetRaw(), restoredKey.GetRaw());
             }
 
             [TestMethod]
@@ -134,28 +155,23 @@ namespace CryptomatorLib.Tests.Common
         {
             private MasterkeyFile _keyFile;
             private MasterkeyFileAccess _masterkeyFileAccess;
+            private PerpetualMasterkey _key;
 
             [TestInitialize]
             public void Setup()
             {
-                _keyFile = new MasterkeyFile();
-                _masterkeyFileAccess = new MasterkeyFileAccess(new byte[0], SecureRandomMock.NULL_RANDOM);
-
-                _keyFile.Version = 3;
-                _keyFile.ScryptSalt = new byte[8];
-                _keyFile.ScryptCostParam = 2;
-                _keyFile.ScryptBlockSize = 8;
-                _keyFile.EncMasterKey = Convert.FromBase64String("mM+qoQ+o0qvPTiDAZYt+flaC3WbpNAx1sTXaUzxwpy0M9Ctj6Tih/Q==");
-                _keyFile.MacMasterKey = Convert.FromBase64String("mM+qoQ+o0qvPTiDAZYt+flaC3WbpNAx1sTXaUzxwpy0M9Ctj6Tih/Q==");
-                _keyFile.VersionMac = Convert.FromBase64String("iUmRRHITuyJsJbVNqGNw+82YQ4A3Rma7j/y1v0DCVLA=");
+                _key = new PerpetualMasterkey(new byte[64]);
+                _masterkeyFileAccess = new MasterkeyFileAccess(DEFAULT_PEPPER, REAL_RANDOM);
+                _keyFile = _masterkeyFileAccess.Lock(_key, "asd", VAULT_VERSION_TEST, SCRYPT_N_TEST);
             }
 
             [TestMethod]
             [DisplayName("Test Unlock With Correct Password")]
             public void TestUnlockWithCorrectPassword()
             {
-                var key = _masterkeyFileAccess.Unlock(_keyFile, "asd");
-                Assert.IsNotNull(key);
+                using var unlockedKey = _masterkeyFileAccess.Unlock(_keyFile, "asd");
+                Assert.IsNotNull(unlockedKey);
+                CollectionAssert.AreEqual(_key.GetRaw(), unlockedKey.GetRaw());
             }
 
             [TestMethod]
@@ -172,11 +188,11 @@ namespace CryptomatorLib.Tests.Common
             [DisplayName("Test Unlock With Incorrect Pepper")]
             public void TestUnlockWithIncorrectPepper()
             {
-                MasterkeyFileAccess masterkeyFileAccess = new MasterkeyFileAccess(new byte[1], SecureRandomMock.NULL_RANDOM);
+                MasterkeyFileAccess masterkeyFileAccessWithPepper = new MasterkeyFileAccess(new byte[1], REAL_RANDOM);
 
                 Assert.ThrowsException<CryptomatorLib.Api.InvalidCredentialException>(() =>
                 {
-                    masterkeyFileAccess.Unlock(_keyFile, "qwe");
+                    masterkeyFileAccessWithPepper.Unlock(_keyFile, "asd");
                 });
             }
         }
@@ -191,32 +207,39 @@ namespace CryptomatorLib.Tests.Common
             public void Setup()
             {
                 _key = new PerpetualMasterkey(new byte[64]);
-                _masterkeyFileAccess = new MasterkeyFileAccess(new byte[0], SecureRandomMock.NULL_RANDOM);
+                _masterkeyFileAccess = new MasterkeyFileAccess(DEFAULT_PEPPER, REAL_RANDOM);
             }
 
             [TestMethod]
-            [DisplayName("Test Lock Creates Expected Values")]
+            [DisplayName("Test Lock Creates Expected Structure")]
             public void TestLock()
             {
-                MasterkeyFile keyFile = _masterkeyFileAccess.Lock(_key, "asd", 3, 2);
+                MasterkeyFile keyFile = _masterkeyFileAccess.Lock(_key, "asd", VAULT_VERSION_TEST, SCRYPT_N_TEST);
 
-                Assert.AreEqual(3, keyFile.Version);
-                CollectionAssert.AreEqual(new byte[8], keyFile.ScryptSalt);
-                Assert.AreEqual(2, keyFile.ScryptCostParam);
-                Assert.AreEqual(8, keyFile.ScryptBlockSize);
-                CollectionAssert.AreEqual(Convert.FromBase64String("mM+qoQ+o0qvPTiDAZYt+flaC3WbpNAx1sTXaUzxwpy0M9Ctj6Tih/Q=="), keyFile.EncMasterKey);
-                CollectionAssert.AreEqual(Convert.FromBase64String("mM+qoQ+o0qvPTiDAZYt+flaC3WbpNAx1sTXaUzxwpy0M9Ctj6Tih/Q=="), keyFile.MacMasterKey);
-                CollectionAssert.AreEqual(Convert.FromBase64String("iUmRRHITuyJsJbVNqGNw+82YQ4A3Rma7j/y1v0DCVLA="), keyFile.VersionMac);
+                Assert.AreEqual(VAULT_VERSION_TEST, keyFile.Version);
+                Assert.AreEqual(SCRYPT_N_TEST, keyFile.ScryptCostParam);
+                Assert.AreEqual(SCRYPT_R_TEST, keyFile.ScryptBlockSize);
+
+                Assert.IsNotNull(keyFile.ScryptSalt);
+                Assert.AreEqual(16, keyFile.ScryptSalt.Length);
+
+                Assert.IsNotNull(keyFile.EncMasterKey);
+                Assert.IsTrue(keyFile.EncMasterKey.Length > 0);
+                Assert.IsNotNull(keyFile.MacMasterKey);
+                Assert.IsTrue(keyFile.MacMasterKey.Length > 0);
+                Assert.IsNotNull(keyFile.VersionMac);
+                Assert.IsTrue(keyFile.VersionMac.Length > 0);
             }
 
             [TestMethod]
             [DisplayName("Test Lock With Different Passwords")]
             public void TestLockWithDifferentPasswords()
             {
-                MasterkeyFile keyFile1 = _masterkeyFileAccess.Lock(_key, "asd", 8, 2);
-                MasterkeyFile keyFile2 = _masterkeyFileAccess.Lock(_key, "qwe", 8, 2);
+                MasterkeyFile keyFile1 = _masterkeyFileAccess.Lock(_key, "asd", VAULT_VERSION_TEST, SCRYPT_N_TEST);
+                MasterkeyFile keyFile2 = _masterkeyFileAccess.Lock(_key, "qwe", VAULT_VERSION_TEST, SCRYPT_N_TEST);
 
                 CollectionAssert.AreNotEqual(keyFile1.EncMasterKey, keyFile2.EncMasterKey);
+                CollectionAssert.AreNotEqual(keyFile1.ScryptSalt, keyFile2.ScryptSalt);
             }
 
             [TestMethod]
@@ -225,13 +248,14 @@ namespace CryptomatorLib.Tests.Common
             {
                 byte[] pepper1 = new byte[] { 0x01 };
                 byte[] pepper2 = new byte[] { 0x02 };
-                MasterkeyFileAccess masterkeyFileAccess1 = new MasterkeyFileAccess(pepper1, SecureRandomMock.NULL_RANDOM);
-                MasterkeyFileAccess masterkeyFileAccess2 = new MasterkeyFileAccess(pepper2, SecureRandomMock.NULL_RANDOM);
+                MasterkeyFileAccess masterkeyFileAccess1 = new MasterkeyFileAccess(pepper1, REAL_RANDOM);
+                MasterkeyFileAccess masterkeyFileAccess2 = new MasterkeyFileAccess(pepper2, REAL_RANDOM);
 
-                MasterkeyFile keyFile1 = masterkeyFileAccess1.Lock(_key, "asd", 8, 2);
-                MasterkeyFile keyFile2 = masterkeyFileAccess2.Lock(_key, "asd", 8, 2);
+                MasterkeyFile keyFile1 = masterkeyFileAccess1.Lock(_key, "asd", VAULT_VERSION_TEST, SCRYPT_N_TEST);
+                MasterkeyFile keyFile2 = masterkeyFileAccess2.Lock(_key, "asd", VAULT_VERSION_TEST, SCRYPT_N_TEST);
 
                 CollectionAssert.AreNotEqual(keyFile1.EncMasterKey, keyFile2.EncMasterKey);
+                CollectionAssert.AreNotEqual(keyFile1.ScryptSalt, keyFile2.ScryptSalt);
             }
         }
 
@@ -239,22 +263,17 @@ namespace CryptomatorLib.Tests.Common
         [DisplayName("Test Persist And Load")]
         public void TestPersistAndLoad()
         {
-            // Create temporary file
             string tempFilePath = Path.GetTempFileName();
             try
             {
-                // Persist the masterkey to a file
-                _masterkeyFileAccess.Persist(_key, tempFilePath, "asd");
+                _masterkeyFileAccess.Persist(_key, tempFilePath, "asd", VAULT_VERSION_TEST, SCRYPT_N_TEST);
 
-                // Load the masterkey from the file
                 PerpetualMasterkey loaded = _masterkeyFileAccess.Load(tempFilePath, "asd");
 
-                // Verify the loaded key matches the original
                 CollectionAssert.AreEqual(_key.GetRaw(), loaded.GetRaw());
             }
             finally
             {
-                // Clean up the temporary file
                 if (File.Exists(tempFilePath))
                 {
                     File.Delete(tempFilePath);

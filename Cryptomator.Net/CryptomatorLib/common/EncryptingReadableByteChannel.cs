@@ -66,7 +66,7 @@ namespace CryptomatorLib.Common
 
             // If we've reached the end of input and have no more buffered data, we're done
             if (_endOfInput && _encryptedBufferPosition >= _encryptedBufferLimit)
-                return -1;
+                return 0;
 
             // Write header first if not written yet
             if (!_headerWritten)
@@ -92,13 +92,13 @@ namespace CryptomatorLib.Common
                 // Copy data from buffer to destination
                 int bytesToCopy = Math.Min(remaining, _encryptedBufferLimit - _encryptedBufferPosition);
                 Buffer.BlockCopy(_encryptedBuffer, _encryptedBufferPosition, dst, offset + totalBytesRead, bytesToCopy);
-                
+
                 _encryptedBufferPosition += bytesToCopy;
                 totalBytesRead += bytesToCopy;
                 remaining -= bytesToCopy;
             }
 
-            return totalBytesRead > 0 ? totalBytesRead : -1;
+            return totalBytesRead;
         }
 
         /// <summary>
@@ -131,12 +131,12 @@ namespace CryptomatorLib.Common
         {
             Memory<byte> encryptedHeader = _headerCryptor.EncryptHeader(_header);
             byte[] headerBytes = encryptedHeader.ToArray();
-            
+
             // Copy the header to our buffer
             Buffer.BlockCopy(headerBytes, 0, _encryptedBuffer, 0, headerBytes.Length);
             _encryptedBufferPosition = 0;
             _encryptedBufferLimit = headerBytes.Length;
-            
+
             _headerWritten = true;
         }
 
@@ -149,7 +149,7 @@ namespace CryptomatorLib.Common
             {
                 // Read a chunk of cleartext
                 int bytesRead = _source.Read(_cleartextBuffer, 0, _cleartextBuffer.Length);
-                
+
                 if (bytesRead <= 0)
                 {
                     _endOfInput = true;
@@ -159,15 +159,15 @@ namespace CryptomatorLib.Common
                 // Encrypt the chunk
                 ReadOnlyMemory<byte> cleartextChunk = new ReadOnlyMemory<byte>(_cleartextBuffer, 0, bytesRead);
                 Memory<byte> encryptedChunk = _contentCryptor.EncryptChunk(cleartextChunk, _chunkNumber, _header);
-                
+
                 // Copy to buffer
                 byte[] encryptedArray = encryptedChunk.ToArray();
                 Buffer.BlockCopy(encryptedArray, 0, _encryptedBuffer, 0, encryptedArray.Length);
-                
+
                 _encryptedBufferPosition = 0;
                 _encryptedBufferLimit = encryptedArray.Length;
                 _chunkNumber++;
-                
+
                 return true;
             }
             catch (EndOfStreamException)
@@ -183,4 +183,4 @@ namespace CryptomatorLib.Common
                 throw new ObjectDisposedException(GetType().Name);
         }
     }
-} 
+}

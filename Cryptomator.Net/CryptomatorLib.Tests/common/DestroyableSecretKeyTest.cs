@@ -89,6 +89,14 @@ namespace CryptomatorLib.Tests.Common
         }
 
         [TestMethod]
+        [DisplayName("Constructor Fails For Null Algorithm")]
+        public void TestConstructorFailsForNullAlgorithm()
+        {
+            Assert.ThrowsException<ArgumentNullException>(() =>
+                new DestroyableSecretKey(new byte[16], null));
+        }
+
+        [TestMethod]
         [DisplayName("Constructor Fails For Invalid Length")]
         public void TestConstructorFailsForInvalidLength()
         {
@@ -138,7 +146,7 @@ namespace CryptomatorLib.Tests.Common
             [TestInitialize]
             public void Setup()
             {
-                _rawKey = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+                _rawKey = Enumerable.Range(1, 32).Select(i => (byte)i).ToArray();
                 _key = new DestroyableSecretKey(_rawKey, "EXAMPLE");
             }
 
@@ -190,7 +198,7 @@ namespace CryptomatorLib.Tests.Common
             [TestInitialize]
             public void Setup()
             {
-                byte[] keyBytes = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 };
+                byte[] keyBytes = Enumerable.Range(1, 32).Select(i => (byte)i).ToArray();
                 _key = new DestroyableSecretKey(keyBytes, "EXAMPLE");
                 _key.Destroy();
             }
