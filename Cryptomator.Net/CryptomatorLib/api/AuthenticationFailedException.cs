@@ -4,7 +4,7 @@ namespace CryptomatorLib.Api
 {
     /// <summary>
     /// Thrown when authentication of encrypted data fails, i.e. when the authenticity or integrity
-    /// of the data cannot be verified.
+    /// of the data cannot be verified. 
     /// </summary>
     public class AuthenticationFailedException : CryptoException
     {
