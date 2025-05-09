@@ -1,8 +1,8 @@
-# Cryptomator.Net Library Documentation
+# Uvf.Net Library Documentation
 
 ## Overview
 
-Cryptomator.Net is a C# implementation of the Cryptomator library, providing secure client-side encryption for cloud storage. The library follows the Universal Vault Format (UVF) specification and provides APIs for file name encryption, file content encryption, and key management.
+Uvf.Net is a C# implementation of the Uvf library, providing secure client-side encryption for cloud storage. The library follows the Universal Vault Format (UVF) specification and provides APIs for file name encryption, file content encryption, and key management.
 
 <p style="color:red;">!! DISCLAIMER / WARNING !!</p>
 
@@ -16,10 +16,10 @@ Under no circumstances shall the authors or contributors be held liable for any 
 
 ### Installation
 
-Add the CryptomatorLib project to your solution or reference the compiled DLL:
+Add the UvfLib project to your solution or reference the compiled DLL:
 
 ```csharp
-<PackageReference Include="CryptomatorLib" Version="1.0.0" />
+<PackageReference Include="UvfLib" Version="1.0.0" />
 ```
 
 ### Basic Usage
@@ -27,8 +27,8 @@ Add the CryptomatorLib project to your solution or reference the compiled DLL:
 Here's a simple example of how to use the library:
 
 ```csharp
-using CryptomatorLib.Api;
-using CryptomatorLib.Common;
+using UvfLib.Api;
+using UvfLib.Common;
 using System;
 using System.IO;
 using System.Security.Cryptography;
@@ -86,10 +86,10 @@ The library is organized into three main components:
 MasterkeyFile file = MasterkeyFileAccess.CreateFromPassphrase("your-secure-passphrase");
 
 // Save to disk
-MasterkeyFileAccess.Save(file, "masterkey.cryptomator");
+MasterkeyFileAccess.Save(file, "masterkey.Uvf");
 
 // Load from disk with passphrase
-MasterkeyFile loadedFile = MasterkeyFileAccess.Load("masterkey.cryptomator");
+MasterkeyFile loadedFile = MasterkeyFileAccess.Load("masterkey.Uvf");
 byte[] rawKey = MasterkeyFileAccess.LoadRawMasterkey(loadedFile, "your-secure-passphrase");
 
 // Create UVF masterkey and use it
@@ -137,7 +137,7 @@ using (var outputStream = File.Create("encrypted.bin"))
 
 ### File Name Encryption
 
-Each directory in a Cryptomator vault has a unique ID. This ID is used as additional authenticated data during filename encryption to ensure that moving a file to a different directory changes its encrypted name.
+Each directory in a Uvf vault has a unique ID. This ID is used as additional authenticated data during filename encryption to ensure that moving a file to a different directory changes its encrypted name.
 
 ```csharp
 // Generate a unique ID for each directory
@@ -212,4 +212,4 @@ finally {
 
 ## Conclusion
 
-The Cryptomator.Net library provides powerful, standards-based encryption for files, compatible with the Cryptomator ecosystem. By following this documentation, you can integrate secure, client-side encryption into your .NET applications.
+The Uvf.Net library provides powerful, standards-based encryption for files, compatible with the Uvf ecosystem. By following this documentation, you can integrate secure, client-side encryption into your .NET applications.

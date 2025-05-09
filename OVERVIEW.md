@@ -1,16 +1,16 @@
-# Cryptomator.Net Library Overview
+# Uvf.Net Library Overview
 
-## 1. What is Cryptomator?
+## 1. What is Uvf?
 
-Cryptomator is a system designed for client-side encryption, primarily aimed at securing files stored in cloud services, but equally effective for local storage. It operates by creating encrypted "vaults". To the user, a vault appears as a regular drive or folder where they can store files and directories normally. However, the actual files stored within the vault (e.g., on Dropbox, Google Drive, or a local disk) are individually encrypted, including their names and the directory structure itself.
+Uvf is a system designed for client-side encryption, primarily aimed at securing files stored in cloud services, but equally effective for local storage. It operates by creating encrypted "vaults". To the user, a vault appears as a regular drive or folder where they can store files and directories normally. However, the actual files stored within the vault (e.g., on Dropbox, Google Drive, or a local disk) are individually encrypted, including their names and the directory structure itself.
 
-Cryptomator.Net is a C# implementation of the core cryptographic logic defined by the Cryptomator project, specifically adhering to the Universal Vault Format (UVF) version 3. It provides the necessary tools to interact with Cryptomator vaults programmatically within .NET applications.
+Uvf.Net is a C# implementation of the core cryptographic logic defined by the Uvf project, specifically adhering to the Universal Vault Format (UVF) version 3. It provides the necessary tools to interact with Uvf vaults programmatically within .NET applications.
 
 **Disclaimer:** As noted in the main README, this C# library was semi-automatically translated from the official Java implementation. While efforts were made for accuracy, it may contain cryptographic flaws or subtle errors. It is intended for educational/experimental use and should **not** be used for securing sensitive production data without a thorough independent security audit.
 
 ## 2. Purpose: Creating Secure Vaults
 
-The primary purpose of Cryptomator (and thus Cryptomator.Net) is to create and manage these secure vaults. A vault is essentially a designated folder on your storage medium (local or cloud) with two key characteristics:
+The primary purpose of Uvf (and thus Uvf.Net) is to create and manage these secure vaults. A vault is essentially a designated folder on your storage medium (local or cloud) with two key characteristics:
 
 1.  **Encrypted Content:** All file contents stored within the vault's underlying folder structure are encrypted.
 2.  **Encrypted Structure:** The names of files and directories are also encrypted, and the directory hierarchy is obfuscated. This means someone accessing the raw vault folder cannot determine the original filenames, directory names, or even the original folder structure just by looking at the stored data.
@@ -19,11 +19,11 @@ This approach ensures that even if the storage provider (or anyone accessing the
 
 ## 3. How Encryption Works
 
-Cryptomator employs a multi-layered encryption strategy:
+Uvf employs a multi-layered encryption strategy:
 
 *   **File Content Encryption:** The actual data within each file is encrypted using strong symmetric encryption.
 *   **Filename Encryption:** The names of files and directories are encrypted using a different authenticated encryption scheme.
-*   **Directory Structure Obfuscation:** Instead of storing encrypted directory names directly, Cryptomator uses a hashing mechanism based on unique Directory IDs to create the physical paths where encrypted files are stored.
+*   **Directory Structure Obfuscation:** Instead of storing encrypted directory names directly, Uvf uses a hashing mechanism based on unique Directory IDs to create the physical paths where encrypted files are stored.
 
 ### 3.1 File Content Encryption
 
@@ -44,7 +44,7 @@ Cryptomator employs a multi-layered encryption strategy:
 
 ### 3.3 Directory Structure Obfuscation
 
--   Cryptomator does *not* simply encrypt directory names and store them. Instead, it obfuscates the structure.
+-   Uvf does *not* simply encrypt directory names and store them. Instead, it obfuscates the structure.
 -   Each directory within the vault is assigned a unique **Directory ID**.
 -   When a directory is created, its Directory ID is used to calculate a **Hashed Path**. This hash (derived using HMAC-SHA256 with a specific key derived from the master key, then truncated and Base32 encoded) determines the physical subdirectory within the vault's `d` folder where the directory's contents (encrypted files and `dir.uvf` files for subdirectories) will be stored.
 -   Inside this hashed path directory, a special file named `dir.uvf` is created. This file contains the **encrypted Directory Metadata**, including the directory's unique ID. This metadata is encrypted similarly to file headers.
@@ -53,10 +53,10 @@ This means the physical path structure inside the vault (`d/XX/YYYYYYYY/...`) be
 
 ## 4. Key Management
 
-Cryptomator's security relies on robust key management derived from a single user password:
+Uvf's security relies on robust key management derived from a single user password:
 
 1.  **Password:** The user provides a strong password for the vault.
-2.  **Scrypt:** The password, along with a unique salt stored in the `masterkey.cryptomator` file, is fed into the **scrypt** key derivation function. Scrypt is computationally expensive, making brute-force attacks on the password very difficult. This produces the raw **Vault Master Key** (typically 256 bits).
+2.  **Scrypt:** The password, along with a unique salt stored in the `masterkey.Uvf` file, is fed into the **scrypt** key derivation function. Scrypt is computationally expensive, making brute-force attacks on the password very difficult. This produces the raw **Vault Master Key** (typically 256 bits).
 3.  **Master Key:** This single raw key is the root of trust for the entire vault.
 4.  **Key Derivation (HKDF):** The raw Master Key is *never* used directly for encryption. Instead, specific **sub-keys** are derived from it using **HKDF** (HMAC-based Key Derivation Function based on SHA-256). HKDF takes the master key, an optional salt (often not used for sub-keys), and a context-specific "info" parameter (like "fileHeader", "fileContent", "siv", "hmac", "directoryId") to deterministically generate different keys for different purposes:
     *   **Header Encryption Key:** Used to encrypt/decrypt the Content Key within file headers.
@@ -78,9 +78,9 @@ This hierarchical derivation ensures that even if one sub-key were somehow compr
 
 ## 6. Vault Structure
 
-A typical Cryptomator vault folder contains:
+A typical Uvf vault folder contains:
 
-1.  **`masterkey.cryptomator` file:** An encrypted JSON file containing the salt and parameters needed for scrypt, along with the master key encrypted using scrypt and the user's password.
+1.  **`masterkey.Uvf` file:** An encrypted JSON file containing the salt and parameters needed for scrypt, along with the master key encrypted using scrypt and the user's password.
 2.  **`d` directory:** The root directory for all encrypted data.
 3.  **Inside `d`:** A nested structure of directories whose names are derived from the **hashed Directory IDs**. The depth and specific names depend on the hash output. For example: `d/AB/CDEFGHIJKLMNOPQRSTUVWXYZ234567/`.
 4.  **Inside Hashed Path Directories:**
@@ -104,7 +104,7 @@ The actual encrypted vault folder might look something like this (simplified has
 
 ```
 (Storage Location)/EncryptedVaultFolder/
-├── masterkey.cryptomator
+├── masterkey.Uvf
 └── d/
     ├── 3K/  <-- Hashed path for root ("/") directory ID
     │   ├── dir.uvf                  <-- Represents 'Documents' subdir
