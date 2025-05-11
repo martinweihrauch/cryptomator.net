@@ -121,42 +121,15 @@ namespace UvfLib.V3
                 Debug.WriteLine($"latestSeed B64: {latestSeedStr}");
                 Debug.WriteLine($"kdfSalt B64: {kdfSaltStr}");
 
-                // Special case handling for known seed IDs
                 int initialSeedId, latestSeedId;
 
-                if (initialSeedStr == "HDm38i")
-                {
-                    initialSeedId = 473544690;
-                    Debug.WriteLine($"Using hardcoded value for initialSeed: {initialSeedId}");
-                }
-                else if (initialSeedStr == "QBsJFo")
-                {
-                    initialSeedId = 1075513622;
-                    Debug.WriteLine($"Using hardcoded value for initialSeed: {initialSeedId}");
-                }
-                else
-                {
-                    // Convert from Base64URL using our utility
-                    byte[] initialSeed = Base64Url.Decode(initialSeedStr);
-                    initialSeedId = BinaryPrimitives.ReadInt32BigEndian(initialSeed);
-                }
+                // Convert initialSeed from Base64URL using our utility
+                byte[] initialSeedBytes = Base64Url.Decode(initialSeedStr);
+                initialSeedId = BinaryPrimitives.ReadInt32BigEndian(initialSeedBytes);
 
-                if (latestSeedStr == "QBsJFo")
-                {
-                    latestSeedId = 1075513622;
-                    Debug.WriteLine($"Using hardcoded value for latestSeed: {latestSeedId}");
-                }
-                else if (latestSeedStr == "HDm38i")
-                {
-                    latestSeedId = 473544690;
-                    Debug.WriteLine($"Using hardcoded value for latestSeed: {latestSeedId}");
-                }
-                else
-                {
-                    // Convert from Base64URL using our utility
-                    byte[] latestSeed = Base64Url.Decode(latestSeedStr);
-                    latestSeedId = BinaryPrimitives.ReadInt32BigEndian(latestSeed);
-                }
+                // Convert latestSeed from Base64URL using our utility
+                byte[] latestSeedBytes = Base64Url.Decode(latestSeedStr);
+                latestSeedId = BinaryPrimitives.ReadInt32BigEndian(latestSeedBytes);
 
                 // Convert from Base64URL using our utility
                 byte[] kdfSalt = Base64Url.Decode(kdfSaltStr);
@@ -173,40 +146,20 @@ namespace UvfLib.V3
 
                         Debug.WriteLine($"Processing seed: {seedIdB64} -> {seedValueB64}");
 
-                        // Special case handling for known seed IDs
-                        int seedId;
-                        if (seedIdB64 == "HDm38i")
-                        {
-                            seedId = 473544690;
-                            Debug.WriteLine($"Using hardcoded ID for {seedIdB64}: {seedId}");
-                        }
-                        else if (seedIdB64 == "QBsJFo")
-                        {
-                            seedId = 1075513622;
-                            Debug.WriteLine($"Using hardcoded ID for {seedIdB64}: {seedId}");
-                        }
-                        else if (seedIdB64 == "gBryKw")
-                        {
-                            seedId = 1946999083;
-                            Debug.WriteLine($"Using hardcoded ID for {seedIdB64}: {seedId}");
-                        }
-                        else
-                        {
-                            // Convert from Base64URL using our utility
-                            byte[] seedIdBytes = Base64Url.Decode(seedIdB64);
+                        // Convert seedId from Base64URL using our utility
+                        byte[] seedIdBytes = Base64Url.Decode(seedIdB64);
 
-                            // Ensure we have 4 bytes for the seedId
-                            if (seedIdBytes.Length < 4)
-                            {
-                                byte[] paddedBytes = new byte[4];
-                                Array.Copy(seedIdBytes, 0, paddedBytes, 4 - seedIdBytes.Length, seedIdBytes.Length);
-                                seedIdBytes = paddedBytes;
-                            }
-
-                            seedId = BitConverter.IsLittleEndian
-                                ? BinaryPrimitives.ReadInt32BigEndian(seedIdBytes)
-                                : BitConverter.ToInt32(seedIdBytes);
+                        // Ensure we have 4 bytes for the seedId
+                        if (seedIdBytes.Length < 4)
+                        {
+                            byte[] paddedBytes = new byte[4];
+                            Array.Copy(seedIdBytes, 0, paddedBytes, 4 - seedIdBytes.Length, seedIdBytes.Length);
+                            seedIdBytes = paddedBytes;
                         }
+
+                        int seedId = BitConverter.IsLittleEndian
+                            ? BinaryPrimitives.ReadInt32BigEndian(seedIdBytes)
+                            : BitConverter.ToInt32(seedIdBytes);
 
                         // Convert from Base64URL using our utility
                         byte[] seedValue = Base64Url.Decode(seedValueB64);
@@ -515,41 +468,23 @@ namespace UvfLib.V3
 
             try
             {
-                // Special case handling for known seed IDs
-                int seedIdInt;
+                // Convert seedId from Base64URL to bytes
+                byte[] seedIdBytes = Base64Url.Decode(seedId);
 
-                if (seedId == "HDm38i")
+                // Ensure we have 4 bytes for the seedId
+                if (seedIdBytes.Length < 4)
                 {
-                    seedIdInt = 473544690;
+                    byte[] paddedBytes = new byte[4];
+                    Array.Copy(seedIdBytes, 0, paddedBytes, 4 - seedIdBytes.Length, seedIdBytes.Length);
+                    seedIdBytes = paddedBytes;
                 }
-                else if (seedId == "QBsJFo")
-                {
-                    seedIdInt = 1075513622;
-                }
-                else if (seedId == "gBryKw")
-                {
-                    seedIdInt = 1946999083;
-                }
-                else
-                {
-                    // Convert from Base64URL to bytes
-                    byte[] seedIdBytes = Base64Url.Decode(seedId);
 
-                    // Ensure we have 4 bytes for the seedId
-                    if (seedIdBytes.Length < 4)
-                    {
-                        byte[] paddedBytes = new byte[4];
-                        Array.Copy(seedIdBytes, 0, paddedBytes, 4 - seedIdBytes.Length, seedIdBytes.Length);
-                        seedIdBytes = paddedBytes;
-                    }
-
-                    seedIdInt = BitConverter.IsLittleEndian
-                        ? BinaryPrimitives.ReadInt32BigEndian(seedIdBytes)
-                        : BitConverter.ToInt32(seedIdBytes);
-                }
+                int seedIdInt = BitConverter.IsLittleEndian
+                    ? BinaryPrimitives.ReadInt32BigEndian(seedIdBytes)
+                    : BitConverter.ToInt32(seedIdBytes);
 
                 if (!_seeds.ContainsKey(seedIdInt))
-                    throw new ArgumentException($"No seed with ID {seedId} exists", nameof(seedId));
+                    throw new ArgumentException($"No seed with string ID \"{seedId}\" (decoded to int ID {seedIdInt}) exists", nameof(seedId));
 
                 return this;
             }
