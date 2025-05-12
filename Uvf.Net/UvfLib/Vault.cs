@@ -1,20 +1,21 @@
 /*******************************************************************************
- * Copyright (c) 2016 Sebastian Stenzel and others.
+ * Copyright (c) 2016 Sebastian Stenzel and others 
+ * Copyright (c) 2025 Smart In Venture GmbH for C# Porting
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the accompanying LICENSE.txt.
  *
  * Contributors:
  *     Sebastian Stenzel - initial API and implementation
+ *     
+ *     Smart In Venture GmbH - C# Porting (c) 2025
+ *     
  *******************************************************************************/
 
 // Copyright (c) Smart In Venture GmbH 2025 of the C# Porting
 
-using System;
-using System.IO;
 using System.Security.Cryptography;
 using UvfLib.Api;
 using UvfLib.Common;
-using UvfLib.V3; // Assuming V3 implementation for now
 using UvfLib.VaultHelpers; // Added for VaultKeyHelper
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UvfLib.Tests")]
