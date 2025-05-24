@@ -117,6 +117,7 @@ namespace UvfLib.Common
                 ScryptBlockSize = blockSize,
                 ScryptParallelism = parallelism,
                 VaultVersion = 8, // latest version of Cryptomator Vault Format
+                Version = 8, // Also set the Version property to match VaultVersion
                 ContentEncryptionScheme = "SIV_GCM", // default for version 8
                 FilenameEncryptionScheme = "SIV", // default for version 8
             };
@@ -629,8 +630,9 @@ namespace UvfLib.Common
                     MacMasterKey = wrappedMacKey,
                     VersionMac = versionMac,
 
-                    // Use correct property name "Version" (capital V)
-                    Version = vaultVersion
+                    // Set both version properties to ensure compatibility
+                    Version = vaultVersion,
+                    VaultVersion = vaultVersion // This is the critical fix
                 };
 
                 return masterkeyFileDto;

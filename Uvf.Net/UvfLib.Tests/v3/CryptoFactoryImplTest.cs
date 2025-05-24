@@ -58,7 +58,7 @@ namespace UvfLib.Tests.V3
         public void TestCreateFileContentCryptor()
         {
             // Act
-            FileContentCryptor cryptor = _factory.CreateFileContentCryptor();
+            IFileContentCryptor cryptor = _factory.CreateFileContentCryptor();
 
             // Assert
             Assert.IsNotNull(cryptor);

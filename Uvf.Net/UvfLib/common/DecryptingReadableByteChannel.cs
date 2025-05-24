@@ -11,7 +11,7 @@ namespace UvfLib.Common
     {
         private readonly Stream _source;
         private readonly Cryptor _cryptor;
-        private readonly FileContentCryptor _contentCryptor;
+        private readonly IFileContentCryptor _contentCryptor;
         private readonly int _blockSize;
         private readonly bool _authenticate;
         private FileHeader _header;

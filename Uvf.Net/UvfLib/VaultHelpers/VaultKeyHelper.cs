@@ -10,9 +10,14 @@
 // Copyright (c) Smart In Venture GmbH 2025 of the C# Porting
 
 
+using System;
 using System.Security.Cryptography;
-using UvfLib.Api;
-using UvfLib.Common; // For MasterkeyFileAccess, MasterkeyFile, CryptographicOperations
+using System.Text;
+// using System.Text.Json; // No longer directly needed here for payload construction
+using UvfLib.Api; // For UVFMasterkey for type hinting if needed
+using UvfLib.Common; // For CryptographicOperations
+using UvfLib.Jwe; // For JweVaultManager and UvfMasterkeyPayload
+using UvfLib.V3; // For UVFMasterkeyImpl
 
 namespace UvfLib.VaultHelpers
 {
@@ -22,13 +27,7 @@ namespace UvfLib.VaultHelpers
     /// </summary>
     internal static class VaultKeyHelper
     {
-        private static readonly RandomNumberGenerator CsPrng = RandomNumberGenerator.Create();
-        private const int CURRENT_VAULT_FORMAT_VERSION = 8; // Assuming Cryptomator Vault Format Version 8
-        // Default Scrypt parameters (match MasterkeyFileAccess defaults if possible, check implementation)
-        // Using values from MasterkeyFileAccess internal constants for now
-        private const int SCRYPT_COST_DEFAULT = 1 << 17; // 131072
-        private const int SCRYPT_BLOCK_SIZE_DEFAULT = 8;
-        private const int SCRYPT_PARALLELIZATION_DEFAULT = 1;
+        // private static readonly RandomNumberGenerator CsPrng = RandomNumberGenerator.Create(); // Not used if key gen is in UVFMasterkeyImpl
 
         /// <summary>
         /// Creates the encrypted master key file content for a new vault.
@@ -36,42 +35,41 @@ namespace UvfLib.VaultHelpers
         public static byte[] CreateNewVaultKeyFileContentInternal(string password, byte[]? pepper)
         {
             if (string.IsNullOrEmpty(password)) throw new ArgumentNullException(nameof(password));
-            byte[] effectivePepper = pepper ?? Array.Empty<byte>(); // Use provided pepper or default empty
+            // Pepper usage remains a point for future consideration if needed before PBKDF2.
 
-            PerpetualMasterkey? masterkey = null;
-            byte[]? rawKeyBytes = null; // Declare outside try for finally block access
+            byte[]? masterKeyBytes = null;
+            byte[]? hmacKeyBytes = null;
+            UVFMasterkey? uvfKey = null;
+
             try
             {
-                // 1. Generate a new random PerpetualMasterkey
-                // Generate random key bytes first
-                rawKeyBytes = new byte[PerpetualMasterkey.SubkeyLengthBytes * 2];
-                CsPrng.GetBytes(rawKeyBytes);
-                masterkey = new PerpetualMasterkey(rawKeyBytes);
-                // Raw key bytes are copied internally by PerpetualMasterkey constructor
+                // 1. Generate new raw key material
+                masterKeyBytes = RandomNumberGenerator.GetBytes(32); // AES-256 key
+                hmacKeyBytes = RandomNumberGenerator.GetBytes(32);   // HMAC-SHA256 key
 
-                // 2. Create MasterkeyFileAccess instance using effective pepper
-                var keyAccessor = new MasterkeyFileAccess(effectivePepper, CsPrng);
+                // 2. Create a UVFMasterkeyImpl instance from the raw keys.
+                // This instance will represent a new master key set.
+                // We use the more explicit constructor or static factory method if available.
+                // Using the constructor that takes individual keys:
+                uvfKey = new UVFMasterkeyImpl(masterKeyBytes, hmacKeyBytes, seeds: null, kdfSalt: null, rootDirIdBase64: null, initialSeed: 0, latestSeed: 0);
+                // Or, using a static factory like UVFMasterkeyImpl.CreateFromRaw(masterKeyBytes, hmacKeyBytes);
+                // depending on which is preferred and how it initializes default seeds/versions internally.
 
-                // 3. Lock the key with the password to create the MasterkeyFile structure
-                // Provide default Scrypt parameters - Lock signature needs costParam
-                // Assuming Lock method handles block size and parallelism internally based on MasterkeyFile defaults
-                MasterkeyFile masterkeyFile = keyAccessor.Lock(masterkey, password, CURRENT_VAULT_FORMAT_VERSION, SCRYPT_COST_DEFAULT);
-
-                // 4. Serialize the MasterkeyFile to JSON bytes
-                byte[] encryptedKeyFileContent = masterkeyFile.ToJson();
-
-                return encryptedKeyFileContent;
+                // 3. Get the UvfMasterkeyPayload from the new UVFMasterkeyImpl instance.
+                // This requires UVFMasterkeyImpl to have the ToMasterkeyPayload() method.
+                UvfMasterkeyPayload payload = ((UVFMasterkeyImpl)uvfKey).ToMasterkeyPayload();
+            
+                // 4. Create the JWE string using JweVaultManager
+                string jweString = JweVaultManager.CreateVault(payload, password);
+                return Encoding.UTF8.GetBytes(jweString);
             }
             finally
             {
-                // Ensure sensitive key material is disposed/zeroed
-                masterkey?.Dispose();
-                // Zero out the initially generated bytes buffer if it exists
-                if (rawKeyBytes != null)
-                {
-                    // Fully qualify the call to resolve ambiguity
-                    UvfLib.Common.CryptographicOperations.ZeroMemory(rawKeyBytes);
-                }
+                // Ensure sensitive key material is zeroed out
+                if (masterKeyBytes != null) System.Security.Cryptography.CryptographicOperations.ZeroMemory(masterKeyBytes);
+                if (hmacKeyBytes != null) System.Security.Cryptography.CryptographicOperations.ZeroMemory(hmacKeyBytes);
+                // The UVFMasterkeyImpl instance should handle zeroing its internal keys upon disposal if it implements IDisposable.
+                (uvfKey as IDisposable)?.Dispose(); 
             }
         }
 
@@ -80,28 +78,22 @@ namespace UvfLib.VaultHelpers
         /// </summary>
         public static byte[] ChangeVaultPasswordInternal(byte[] encryptedKeyFileContent, string oldPassword, string newPassword, byte[]? pepper)
         {
-            if (encryptedKeyFileContent == null) throw new ArgumentNullException(nameof(encryptedKeyFileContent));
+            if (encryptedKeyFileContent == null || encryptedKeyFileContent.Length == 0) throw new ArgumentNullException(nameof(encryptedKeyFileContent));
             if (string.IsNullOrEmpty(oldPassword)) throw new ArgumentNullException(nameof(oldPassword));
             if (string.IsNullOrEmpty(newPassword)) throw new ArgumentNullException(nameof(newPassword));
-            byte[] effectivePepper = pepper ?? Array.Empty<byte>(); // Use provided pepper or default empty
+            // Pepper usage remains for future consideration.
 
-            // 1. Create MasterkeyFileAccess instance using effective pepper
-            var keyAccessor = new MasterkeyFileAccess(effectivePepper, CsPrng);
+            string jweStringOld = Encoding.UTF8.GetString(encryptedKeyFileContent);
 
-            // 2. Parse the existing content
-            MasterkeyFile masterkeyFile = MasterkeyFile.FromJson(encryptedKeyFileContent);
+            // 1. Load the existing payload using the old password
+            // LoadVaultPayload returns the UvfMasterkeyPayload directly.
+            UvfMasterkeyPayload existingPayload = JweVaultManager.LoadVaultPayload(jweStringOld, oldPassword);
 
-            // 3. Use the ChangePassphrase method (which internally unlocks with old, locks with new)
-            // ChangePassphrase itself needs pepper for the Unlock and Lock steps internally
-            // Assuming MasterkeyFileAccess uses its instance pepper for this.
-            MasterkeyFile updatedMasterkeyFile = keyAccessor.ChangePassphrase(masterkeyFile, oldPassword, newPassword);
+            // 2. Create a new JWE vault with the existing payload and the new password
+            // This re-encrypts the same master key material with a new KEK derived from the new password.
+            string jweStringNew = JweVaultManager.CreateVault(existingPayload, newPassword);
 
-            // 4. Serialize the updated MasterkeyFile to JSON bytes
-            byte[] newEncryptedKeyFileContent = updatedMasterkeyFile.ToJson();
-
-            return newEncryptedKeyFileContent;
-
-            // Note: Keys inside ChangePassphrase should ideally be disposed automatically by that method.
+            return Encoding.UTF8.GetBytes(jweStringNew);
         }
     }
 }

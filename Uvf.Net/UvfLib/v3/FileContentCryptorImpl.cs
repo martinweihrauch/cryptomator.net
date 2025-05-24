@@ -10,7 +10,7 @@ namespace UvfLib.V3
     /// <summary>
     /// Implementation of the FileContentCryptor interface for v3 format.
     /// </summary>
-    public sealed class FileContentCryptorImpl : FileContentCryptor
+    public sealed class FileContentCryptorImpl : IFileContentCryptor
     {
         private readonly RandomNumberGenerator _random;
         private readonly RevolvingMasterkey _revolvingMasterkey;

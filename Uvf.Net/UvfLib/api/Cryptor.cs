@@ -11,7 +11,7 @@ namespace UvfLib.Api
         /// Encryption and decryption of file content.
         /// </summary>
         /// <returns>Utility for encrypting and decrypting file content</returns>
-        FileContentCryptor FileContentCryptor();
+        IFileContentCryptor FileContentCryptor();
 
         /// <summary>
         /// Encryption and decryption of file headers.

@@ -10,7 +10,7 @@ namespace UvfLib.Common
     public class EncryptingWritableByteChannel : IDisposable
     {
         private readonly Stream _destination;
-        private readonly FileContentCryptor _contentCryptor;
+        private readonly IFileContentCryptor _contentCryptor;
         private readonly FileHeaderCryptor _headerCryptor;
         private readonly FileHeader _header;
         private readonly int _cleartextChunkSize;

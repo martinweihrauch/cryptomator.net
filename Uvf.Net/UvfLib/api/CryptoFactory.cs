@@ -21,6 +21,6 @@ namespace UvfLib.Api
         /// Creates a file content cryptor.
         /// </summary>
         /// <returns>A file content cryptor</returns>
-        FileContentCryptor CreateFileContentCryptor();
+        IFileContentCryptor CreateFileContentCryptor();
     }
 }

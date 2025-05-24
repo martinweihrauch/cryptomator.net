@@ -14,7 +14,7 @@ namespace UvfLib.Tests.Common
         private byte[] _dstFile;
         private MemoryStream _dstStream;
         private Mock<Cryptor> _cryptor;
-        private Mock<FileContentCryptor> _contentCryptor;
+        private Mock<IFileContentCryptor> _contentCryptor;
         private Mock<FileHeaderCryptor> _headerCryptor;
         private Mock<FileHeader> _header;
 
@@ -24,7 +24,7 @@ namespace UvfLib.Tests.Common
             _dstFile = new byte[100];
             _dstStream = new MemoryStream();
             _cryptor = new Mock<Cryptor>();
-            _contentCryptor = new Mock<FileContentCryptor>();
+            _contentCryptor = new Mock<IFileContentCryptor>();
             _headerCryptor = new Mock<FileHeaderCryptor>();
             _header = new Mock<FileHeader>();
 

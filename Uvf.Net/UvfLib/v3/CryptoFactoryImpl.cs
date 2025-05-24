@@ -44,7 +44,7 @@ namespace UvfLib.V3
         /// Creates a file content cryptor.
         /// </summary>
         /// <returns>A file content cryptor</returns>
-        public FileContentCryptor CreateFileContentCryptor()
+        public IFileContentCryptor CreateFileContentCryptor()
         {
             return new FileContentCryptorImpl(_revolvingMasterkey, _random);
         }

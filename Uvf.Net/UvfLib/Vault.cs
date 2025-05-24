@@ -17,6 +17,10 @@ using System.Security.Cryptography;
 using UvfLib.Api;
 using UvfLib.Common;
 using UvfLib.VaultHelpers; // Added for VaultKeyHelper
+using UvfLib.Jwe; // For JweVaultManager and UvfMasterkeyPayload
+using System.IO; // For File operations
+using System.Text; // For Encoding
+using System.Text.Json; // For JsonSerializer
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UvfLib.Tests")]
 
@@ -26,11 +30,29 @@ namespace UvfLib
     /// Represents an unlocked Uvf vault and provides high-level access
     /// to its cryptographic operations.
     /// </summary>
-    public sealed class Vault // Consider adding IDisposable if Cryptor needs disposal
+    public sealed class Vault : IDisposable
     {
         private readonly Cryptor _cryptor;
-        private readonly PerpetualMasterkey _masterkey; // Store the masterkey if needed for operations like ChangePassword
+        private readonly PerpetualMasterkey? _perpetualMasterkey; // For older formats or if UVFMasterkey can provide one
+        private readonly RevolvingMasterkey _revolvingMasterkey; // Main masterkey for UVF
         private static readonly RandomNumberGenerator CsPrng = RandomNumberGenerator.Create(); // Static instance for loading
+        private bool _disposed = false;
+
+        /// <summary>
+        /// Gets the file content cryptor.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">If the cryptor or file content cryptor is not available.</exception>
+        public IFileContentCryptor FileContentCryptor
+        {
+            get
+            {
+                if (_disposed) throw new ObjectDisposedException(nameof(Vault));
+                if (_cryptor == null) throw new InvalidOperationException("Cryptor not initialized.");
+                var fcCryptor = _cryptor.FileContentCryptor();
+                if (fcCryptor == null) throw new InvalidOperationException("File content cryptor not available.");
+                return fcCryptor;
+            }
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="Vault"/> class.
@@ -41,7 +63,57 @@ namespace UvfLib
         private Vault(Cryptor cryptor, PerpetualMasterkey masterkey)
         {
             _cryptor = cryptor ?? throw new ArgumentNullException(nameof(cryptor));
-            _masterkey = masterkey ?? throw new ArgumentNullException(nameof(masterkey));
+            _perpetualMasterkey = masterkey ?? throw new ArgumentNullException(nameof(masterkey));
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="Vault"/> class with both masterkey types.
+        /// </summary>
+        /// <param name="cryptor">The initialized cryptor for this vault.</param>
+        /// <param name="masterkey">The perpetual masterkey.</param>
+        /// <param name="revolvingMasterkey">The revolving masterkey used by the cryptor.</param>
+        private Vault(Cryptor cryptor, PerpetualMasterkey masterkey, RevolvingMasterkey revolvingMasterkey)
+        {
+            _cryptor = cryptor ?? throw new ArgumentNullException(nameof(cryptor));
+            _perpetualMasterkey = masterkey ?? throw new ArgumentNullException(nameof(masterkey));
+            _revolvingMasterkey = revolvingMasterkey ?? throw new ArgumentNullException(nameof(revolvingMasterkey));
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="Vault"/> class with only the revolving masterkey.
+        /// </summary>
+        /// <param name="cryptor">The initialized cryptor for this vault.</param>
+        /// <param name="revolvingMasterkey">The revolving masterkey used by the cryptor.</param>
+        private Vault(Cryptor cryptor, RevolvingMasterkey revolvingMasterkey)
+        {
+            _cryptor = cryptor ?? throw new ArgumentNullException(nameof(cryptor));
+            _revolvingMasterkey = revolvingMasterkey ?? throw new ArgumentNullException(nameof(revolvingMasterkey));
+            _perpetualMasterkey = null; // Or try to adapt if RevolvingMasterkey can provide a Perpetual variant
+        }
+
+        /// <summary>
+        /// Releases all resources used by the Vault.
+        /// </summary>
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                // Dispose the masterkeys
+                _perpetualMasterkey?.Dispose();
+                
+                if (_revolvingMasterkey != null && _revolvingMasterkey is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+
+                // Dispose the cryptor if it implements IDisposable
+                if (_cryptor is IDisposable cryptorDisposable)
+                {
+                    cryptorDisposable.Dispose();
+                }
+
+                _disposed = true;
+            }
         }
 
         // Static utility for key file creation (doesn't require a Vault instance)
@@ -59,10 +131,73 @@ namespace UvfLib
             return VaultKeyHelper.CreateNewVaultKeyFileContentInternal(password, pepper);
         }
 
+        /// <summary>
+        /// Creates the encrypted JWE content for a new UVF vault file.
+        /// </summary>
+        /// <param name="password">The password for the new vault.</param>
+        /// <returns>A byte array containing the encrypted UVF vault file data (JWE string).</returns>
+        public static byte[] CreateNewUvfVaultFileContent(string password)
+        {
+            // Delegate to VaultKeyHelper, pepper is not used for JWE in this simplified setup
+            return VaultKeyHelper.CreateNewVaultKeyFileContentInternal(password, null);
+        }
 
         /// <summary>
-        /// Loads a vault's Cryptor instance using the master key file content and password.
-        /// This Cryptor instance is needed for all subsequent file/directory operations.
+        /// Creates a new UVF vault file (vault.uvf) at the specified path.
+        /// </summary>
+        /// <param name="filePath">The path where the vault.uvf file will be created.</param>
+        /// <param name="password">The password for the new vault.</param>
+        public static void CreateNewUvfVault(string filePath, string password)
+        {
+            if (string.IsNullOrEmpty(filePath)) throw new ArgumentNullException(nameof(filePath));
+            byte[] uvfFileContent = CreateNewUvfVaultFileContent(password);
+            File.WriteAllBytes(filePath, uvfFileContent);
+        }
+
+        /// <summary>
+        /// Loads a UVF vault using its JWE-formatted key file and password.
+        /// </summary>
+        /// <param name="uvfFilePath">The path to the vault.uvf file.</param>
+        /// <param name="password">The vault password.</param>
+        /// <returns>An initialized Vault instance ready for operations.</returns>
+        public static Vault LoadUvfVault(string uvfFilePath, string password)
+        {
+            if (string.IsNullOrEmpty(uvfFilePath)) throw new ArgumentNullException(nameof(uvfFilePath));
+            if (!File.Exists(uvfFilePath)) throw new FileNotFoundException("UVF vault file not found.", uvfFilePath);
+            if (string.IsNullOrEmpty(password)) throw new ArgumentNullException(nameof(password));
+
+            string jweString = File.ReadAllText(uvfFilePath, Encoding.UTF8);
+            UVFMasterkey? uvfMasterkey = null;
+            try
+            {
+                UvfMasterkeyPayload payload = JweVaultManager.LoadVaultPayload(jweString, password);
+                string jsonPayloadString = JsonSerializer.Serialize(payload); 
+                
+                // Api.UVFMasterkey.FromDecryptedPayload is the entry point that leads to UVFMasterkeyImpl
+                uvfMasterkey = (UVFMasterkey)Api.UVFMasterkey.FromDecryptedPayload(jsonPayloadString);
+
+                // Assuming UVF_DRAFT is the correct scheme for your V3 implementation
+                CryptorProvider provider = CryptorProvider.ForScheme(CryptorProvider.Scheme.UVF_DRAFT);
+                Cryptor cryptor = provider.Provide(uvfMasterkey, CsPrng);
+
+                // Use the constructor that primarily takes RevolvingMasterkey for UVF
+                return new Vault(cryptor, uvfMasterkey);
+            }
+            catch (Exception ex) when (ex is Jose.JoseException || ex is JsonException || ex is InvalidOperationException || ex is ArgumentException)
+            {
+                (uvfMasterkey as IDisposable)?.Dispose();
+                // Wrap in a standard library exception type if desired, e.g., MasterkeyLoadingFailedException
+                throw new MasterkeyLoadingFailedException($"Failed to load UVF vault from {uvfFilePath}. Check password or file integrity.", ex);
+            }
+            catch
+            {
+                (uvfMasterkey as IDisposable)?.Dispose();
+                throw; // Re-throw other unexpected exceptions
+            }
+        }
+
+        /// <summary>
+        /// Loads a vault's Cryptor instance using the master key file content and password (Cryptomator old format).
         /// </summary>
         /// <param name="encryptedKeyFileContent">The byte content of the master key file.</param>
         /// <param name="password">The vault password.</param>
@@ -74,69 +209,72 @@ namespace UvfLib
         /// <exception cref="UnsupportedVaultFormatException">If the vault format is not supported.</exception>
         /// <exception cref="MasterkeyLoadingFailedException">For other key loading errors.</exception>
         /// <exception cref="CryptoException">For general cryptographic errors.</exception>
-        public static Vault Load(byte[] encryptedKeyFileContent, string password, byte[]? pepper = null)
+        public static Vault LoadCryptomatorVault(byte[] encryptedKeyFileContent, string password, byte[]? pepper = null)
         {
             if (encryptedKeyFileContent == null) throw new ArgumentNullException(nameof(encryptedKeyFileContent));
-            if (password == null) throw new ArgumentNullException(nameof(password)); // Check password early
-            byte[] effectivePepper = pepper ?? Array.Empty<byte>(); // Use provided pepper or default empty
+            if (password == null) throw new ArgumentNullException(nameof(password));
+            byte[] effectivePepper = pepper ?? Array.Empty<byte>();
 
-            // 1. Parse the masterkey file content
             MasterkeyFile masterkeyFile = MasterkeyFile.FromJson(encryptedKeyFileContent);
-
-            // 2. Unlock the masterkey using the password and pepper
             var keyAccessor = new MasterkeyFileAccess(effectivePepper, CsPrng);
-            PerpetualMasterkey masterkey = keyAccessor.Unlock(masterkeyFile, password);
-
-            // 3. Get the appropriate CryptorProvider based on the master key format
-            CryptorProvider.Scheme scheme;
-            // Check VaultVersion first, assuming 8+ uses UVF format
-            // TODO: Refine this logic if older non-UVF schemes are supported by PerpetualMasterkey
-            if (masterkeyFile.VaultVersion >= 8)
+            PerpetualMasterkey perpetualMasterkey = keyAccessor.Unlock(masterkeyFile, password);
+            RevolvingMasterkey? revolving = null;
+            try 
             {
-                scheme = CryptorProvider.Scheme.UVF_DRAFT;
+                byte[] kdfSalt = new byte[32];
+                CsPrng.GetBytes(kdfSalt);
+                int seedId = 1;
+                byte[] rawKey = perpetualMasterkey.GetRaw();
+                try
+                {
+                    Dictionary<int, byte[]> seeds = new Dictionary<int, byte[]> { { seedId, rawKey } };
+                    revolving = new UvfLib.V3.UVFMasterkeyImpl(seeds, kdfSalt, seedId, seedId);
+                }
+                finally
+                {
+                    UvfLib.Common.CryptographicOperations.ZeroMemory(rawKey);
+                }
+                CryptorProvider.Scheme scheme;
+                if (masterkeyFile.VaultVersion >= 8)
+                {
+                    scheme = CryptorProvider.Scheme.UVF_DRAFT;
+                }
+                else
+                {
+                    var dummyUri = new Uri("file://masterkey.cryptomator");
+                    var detectedFormat = VaultFormat.Unknown;
+                    string errorMessage = $"Unsupported vault version ({masterkeyFile.VaultVersion}) or unable to determine scheme.";
+                    throw new UnsupportedVaultFormatException(dummyUri, detectedFormat, errorMessage);
+                }
+                CryptorProvider provider = CryptorProvider.ForScheme(scheme);
+                Cryptor cryptor = provider.Provide(revolving, CsPrng);
+                return new Vault(cryptor, perpetualMasterkey, revolving);
             }
-            else
+            catch (Exception)
             {
-                // Attempt to map older schemes based on properties if possible
-                // Example (needs verification based on actual V6/V7 masterkey files):
-                // if (masterkeyFile.ContentEncryptionScheme == "AES-GCM" && ...) scheme = CryptorProvider.Scheme.SIV_GCM;
-                // else if (...) scheme = CryptorProvider.Scheme.SIV_CTRMAC;
-                // else ...
-
-                // Use the correct constructor for the exception
-                var dummyUri = new Uri("file://masterkey.cryptomator"); // Placeholder URI
-                var detectedFormat = VaultFormat.Unknown; // Or try to map version
-                string errorMessage = $"Unsupported vault version ({masterkeyFile.VaultVersion}) or unable to determine scheme.";
-                throw new UnsupportedVaultFormatException(dummyUri, detectedFormat, errorMessage);
+                if (revolving != null && revolving is IDisposable disposableRev)
+                {
+                    disposableRev.Dispose();
+                }
+                perpetualMasterkey.Dispose();
+                throw;
             }
-
-            CryptorProvider provider = CryptorProvider.ForScheme(scheme);
-
-            // 4. Get the specific Cryptor implementation using the provider and masterkey
-            Cryptor cryptor = provider.Provide(masterkey, CsPrng);
-
-            // 5. Return a new Vault instance containing the cryptor and masterkey
-            return new Vault(cryptor, masterkey);
         }
 
-        // Static utility for changing password (doesn't require a Vault instance)
         /// <summary>
-        /// Changes the password for an existing vault's master key file content.
+        /// Changes the password for an existing JWE UVF vault file's content.
         /// </summary>
-        /// <param name="encryptedKeyFileContent">The current byte content of the master key file.</param>
+        /// <param name="encryptedUvfFileContent">The current byte content of the vault.uvf file.</param>
         /// <param name="oldPassword">The current vault password.</param>
         /// <param name="newPassword">The desired new vault password.</param>
-        /// <param name="pepper">Optional pepper to use during key derivation. If null, an empty pepper is used.</param>
-        /// <returns>A byte array containing the newly encrypted master key file data.</returns>
-        /// <exception cref="ArgumentNullException">If key content or passwords are null.</exception>
+        /// <returns>A byte array containing the newly encrypted vault.uvf file data.</returns>
+        /// <exception cref="ArgumentNullException">If file content or passwords are null.</exception>
         /// <exception cref="InvalidPassphraseException">If the oldPassword is incorrect.</exception>
-        // ... other exceptions from Load and Save ...
-        public static byte[] ChangeVaultPassword(byte[] encryptedKeyFileContent, string oldPassword, string newPassword, byte[]? pepper = null)
+        public static byte[] ChangeUvfVaultPassword(byte[] encryptedUvfFileContent, string oldPassword, string newPassword)
         {
-            // Delegate to VaultKeyHelper
-            return VaultKeyHelper.ChangeVaultPasswordInternal(encryptedKeyFileContent, oldPassword, newPassword, pepper);
+            // Delegate to VaultKeyHelper, pepper is not used for JWE in this simplified setup
+            return VaultKeyHelper.ChangeVaultPasswordInternal(encryptedUvfFileContent, oldPassword, newPassword, null);
         }
-
 
         // --- Instance Methods for Operations ---
 
@@ -326,6 +464,22 @@ namespace UvfLib
         }
 
         // TODO: Decide if exposing other lower-level operations is useful (e.g., direct chunk access)
+
+        /// <summary>
+        /// Provides access to the underlying Cryptor instance.
+        /// Primarily for advanced use cases or when direct access to cryptor sub-components is needed.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">If the cryptor is not initialized.</exception>
+        /// <exception cref="ObjectDisposedException">If the Vault has been disposed.</exception>
+        internal Cryptor Cryptor // Made internal for helpers like VaultStreamHelper
+        {
+            get
+            {
+                if (_disposed) throw new ObjectDisposedException(nameof(Vault));
+                if (_cryptor == null) throw new InvalidOperationException("Cryptor not initialized.");
+                return _cryptor;
+            }
+        }
 
     }
 }

@@ -27,7 +27,7 @@ namespace UvfLib.V3
         }
 
         /// <inheritdoc/>
-        public FileContentCryptor FileContentCryptor()
+        public IFileContentCryptor FileContentCryptor()
         {
             AssertNotDestroyed();
             return _fileContentCryptor;

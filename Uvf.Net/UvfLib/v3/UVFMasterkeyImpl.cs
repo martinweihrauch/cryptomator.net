@@ -6,9 +6,12 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization; // Required for JsonPropertyName, etc.
 using UvfLib.Api;
 using UvfLib.Common;
-using System.Diagnostics.CodeAnalysis; // Added for MaybeNull
+using UvfLib.Jwe; // For UvfMasterkeyPayload and its sub-classes
+using Jose; // For Base64Url if not using a custom one
+using System.Diagnostics.CodeAnalysis;
 
 namespace UvfLib.V3
 {
@@ -16,23 +19,31 @@ namespace UvfLib.V3
     /// Implementation of the UVFMasterkey interface for Universal Vault Format.
     /// (Original structure before refactoring attempt)
     /// </summary>
-    internal sealed class UVFMasterkeyImpl : UVFMasterkey, DestroyableMasterkey, RevolvingMasterkey, Api.Masterkey
+    public sealed class UVFMasterkeyImpl : UVFMasterkey, DestroyableMasterkey, RevolvingMasterkey, Api.Masterkey
     {
         private static readonly byte[] ROOT_DIRID_KDF_CONTEXT = Encoding.ASCII.GetBytes("rootDirId");
 
-        private readonly Dictionary<int, byte[]> _seeds;
-        private readonly byte[] _kdfSalt;
-        private readonly int _initialSeed;
-        private readonly int _latestSeed;
+        private readonly Dictionary<int, byte[]> _seeds; // Represents parsed seeds from payload
+        private byte[]? _kdfSalt; // From payload.kdf.salt
+        private int _initialSeedId; // Derived from the seed with the earliest creation or explicitly marked
+        private int _latestSeedId;  // Derived from the seed with the latest creation or explicitly marked
+        
+        // Store the primary encryption and HMAC keys from the payload
+        private byte[]? _primaryEncryptionKey;
+        private byte[]? _primaryHmacKey;
+        private string? _rootDirIdValue; // From payload.rootDirId
+
         private bool _destroyed = false;
 
         // Properties to implement UVFMasterkey interface
-        public Dictionary<int, byte[]> Seeds => _seeds;
-        public byte[] KdfSalt => _kdfSalt;
-        public int InitialSeed => _initialSeed;
-        public int LatestSeed => _latestSeed;
-        public byte[] RootDirId => GetRootDirId();
-        public int FirstRevision => GetFirstRevision();
+        public Dictionary<int, byte[]> Seeds => _seeds; // Consider returning a read-only view or copy
+        public byte[] KdfSalt => _kdfSalt != null ? (byte[])_kdfSalt.Clone() : Array.Empty<byte>();
+        
+        // InitialSeed and LatestSeed might need re-evaluation based on how they are determined from payload.seeds
+        public int InitialSeed => _initialSeedId;
+        public int LatestSeed => _latestSeedId;
+        public byte[] RootDirId => !string.IsNullOrEmpty(_rootDirIdValue) ? Jose.Base64Url.Decode(_rootDirIdValue) : Array.Empty<byte>();
+        public int FirstRevision => GetFirstRevision(); // This likely maps to initialSeedId
 
         // Properties to implement Masterkey interface
         public bool IsDestroyed => _destroyed;
@@ -64,151 +75,280 @@ namespace UvfLib.V3
             _kdfSalt = new byte[kdfSalt.Length];
             Buffer.BlockCopy(kdfSalt, 0, _kdfSalt, 0, kdfSalt.Length);
 
-            _initialSeed = initialSeed;
-            _latestSeed = latestSeed;
+            _initialSeedId = initialSeed;
+            _latestSeedId = latestSeed;
             _destroyed = false;
         }
 
         /// <summary>
-        /// Creates a UVF masterkey from a JSON payload.
+        /// Creates a UVF masterkey from a UvfMasterkeyPayload (JWE format).
         /// </summary>
-        /// <param name="json">The JSON payload</param>
-        /// <returns>A UVF masterkey</returns>
-        public static UVFMasterkey FromDecryptedPayload(string json)
+        /// <param name="payload">The payload parsed from JWE</param>
+        private UVFMasterkeyImpl(UvfMasterkeyPayload payload)
         {
-            if (string.IsNullOrEmpty(json))
-                throw new ArgumentException("JSON payload must not be null or empty", nameof(json));
+            if (payload == null)
+                throw new ArgumentNullException(nameof(payload));
+
+            _seeds = new Dictionary<int, byte[]>();
+            
+            // Parse keys from payload
+            if (payload.Keys != null)
+            {
+                foreach (var key in payload.Keys)
+                {
+                    if (key.Purpose == "org.cryptomator.masterkey" && key.Alg == "AES-256-RAW")
+                    {
+                        _primaryEncryptionKey = Jose.Base64Url.Decode(key.Value);
+                    }
+                    else if (key.Purpose == "org.cryptomator.hmacMasterkey" && key.Alg == "HMAC-SHA256-RAW")
+                    {
+                        _primaryHmacKey = Jose.Base64Url.Decode(key.Value);
+                    }
+                }
+            }
+
+            // Parse KDF salt
+            if (payload.Kdf != null && !string.IsNullOrEmpty(payload.Kdf.Salt))
+            {
+                _kdfSalt = Jose.Base64Url.Decode(payload.Kdf.Salt);
+            }
+
+            // Parse seeds
+            if (payload.Seeds != null)
+            {
+                foreach (var seed in payload.Seeds)
+                {
+                    if (!string.IsNullOrEmpty(seed.Id) && !string.IsNullOrEmpty(seed.Value))
+                    {
+                        byte[] seedIdBytes = Jose.Base64Url.Decode(seed.Id);
+                        if (seedIdBytes.Length >= 4) // Assuming int32
+                        {
+                            int seedId = BitConverter.ToInt32(seedIdBytes, 0);
+                            if (BitConverter.IsLittleEndian) // Convert from big-endian
+                            {
+                                seedId = System.Net.IPAddress.NetworkToHostOrder(seedId);
+                            }
+                            byte[] seedValue = Jose.Base64Url.Decode(seed.Value);
+                            _seeds[seedId] = seedValue;
+                        }
+                    }
+                }
+            }
+
+            // Determine initial and latest seed IDs
+            if (_seeds.Any())
+            {
+                _initialSeedId = _seeds.Keys.Min();
+                _latestSeedId = _seeds.Keys.Max();
+            }
+            else
+            {
+                _initialSeedId = 0;
+                _latestSeedId = 0;
+            }
+
+            // Parse root directory ID
+            _rootDirIdValue = payload.RootDirId;
+
+            _destroyed = false;
+        }
+
+        /// <summary>
+        /// Creates a UVF masterkey from a JSON payload string (decrypted from JWE).
+        /// </summary>
+        /// <param name="jsonPayload">The JSON payload string</param>
+        /// <returns>A UVF masterkey</returns>
+        public static UVFMasterkey FromDecryptedPayload(string jsonPayload)
+        {
+            if (string.IsNullOrEmpty(jsonPayload))
+                throw new ArgumentException("JSON payload must not be null or empty", nameof(jsonPayload));
 
             try
             {
-                using JsonDocument doc = JsonDocument.Parse(json);
-                JsonElement root = doc.RootElement;
-
-                // Validate file format
-                if (!root.TryGetProperty("fileFormat", out JsonElement fileFormatElem) ||
-                    fileFormatElem.GetString() != "AES-256-GCM-32k")
+                var options = new JsonSerializerOptions
                 {
-                    throw new ArgumentException("Invalid fileFormat value");
+                    PropertyNameCaseInsensitive = true // Helpful if casing mismatches UVF spec
+                };
+                UvfMasterkeyPayload? payload = JsonSerializer.Deserialize<UvfMasterkeyPayload>(jsonPayload, options);
+
+                if (payload == null)
+                {
+                    throw new JsonException("Failed to deserialize JSON payload into UvfMasterkeyPayload.");
+                }
+                
+                if (payload.UvfSpecVersion != 1)
+                {
+                    throw new ArgumentException($"Unsupported UVF specification version: {payload.UvfSpecVersion}");
                 }
 
-                // Validate name format
-                if (!root.TryGetProperty("nameFormat", out JsonElement nameFormatElem) ||
-                    nameFormatElem.GetString() != "AES-SIV-512-B64URL")
-                {
-                    throw new ArgumentException("Invalid nameFormat value");
-                }
-
-                // Validate KDF
-                if (!root.TryGetProperty("kdf", out JsonElement kdfElem) ||
-                    kdfElem.GetString() != "HKDF-SHA512")
-                {
-                    throw new ArgumentException("Invalid kdf value");
-                }
-
-                // Validate seeds are present
-                if (!root.TryGetProperty("seeds", out JsonElement seedsElem) ||
-                    seedsElem.ValueKind != JsonValueKind.Object)
-                {
-                    throw new ArgumentException("Missing or invalid seeds");
-                }
-
-                // Extract base64 values - convert from URL-safe to standard Base64 first
-                string initialSeedStr = root.GetProperty("initialSeed").GetString();
-                string latestSeedStr = root.GetProperty("latestSeed").GetString();
-                string kdfSaltStr = root.GetProperty("kdfSalt").GetString();
-
-                Debug.WriteLine($"initialSeed B64: {initialSeedStr}");
-                Debug.WriteLine($"latestSeed B64: {latestSeedStr}");
-                Debug.WriteLine($"kdfSalt B64: {kdfSaltStr}");
-
-                int initialSeedId, latestSeedId;
-
-                // Convert initialSeed from Base64URL using our utility
-                byte[] initialSeedBytes = Base64Url.Decode(initialSeedStr);
-                initialSeedId = BinaryPrimitives.ReadInt32BigEndian(initialSeedBytes);
-
-                // Convert latestSeed from Base64URL using our utility
-                byte[] latestSeedBytes = Base64Url.Decode(latestSeedStr);
-                latestSeedId = BinaryPrimitives.ReadInt32BigEndian(latestSeedBytes);
-
-                // Convert from Base64URL using our utility
-                byte[] kdfSalt = Base64Url.Decode(kdfSaltStr);
-                Debug.WriteLine("Successfully decoded kdfSalt");
-
-                // Parse seeds
-                Dictionary<int, byte[]> seeds = new Dictionary<int, byte[]>();
-                try
-                {
-                    foreach (JsonProperty seedProp in seedsElem.EnumerateObject())
-                    {
-                        string seedIdB64 = seedProp.Name;
-                        string seedValueB64 = seedProp.Value.GetString();
-
-                        Debug.WriteLine($"Processing seed: {seedIdB64} -> {seedValueB64}");
-
-                        // Convert seedId from Base64URL using our utility
-                        byte[] seedIdBytes = Base64Url.Decode(seedIdB64);
-
-                        // Ensure we have 4 bytes for the seedId
-                        if (seedIdBytes.Length < 4)
-                        {
-                            byte[] paddedBytes = new byte[4];
-                            Array.Copy(seedIdBytes, 0, paddedBytes, 4 - seedIdBytes.Length, seedIdBytes.Length);
-                            seedIdBytes = paddedBytes;
-                        }
-
-                        int seedId = BitConverter.IsLittleEndian
-                            ? BinaryPrimitives.ReadInt32BigEndian(seedIdBytes)
-                            : BitConverter.ToInt32(seedIdBytes);
-
-                        // Convert from Base64URL using our utility
-                        byte[] seedValue = Base64Url.Decode(seedValueB64);
-                        seeds.Add(seedId, seedValue);
-
-                        Debug.WriteLine($"Added seed with ID: {seedId}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"Error processing seeds: {ex.Message}");
-                    throw;
-                }
-
-                Debug.WriteLine($"Parsed initialSeedId: {initialSeedId}, latestSeedId: {latestSeedId}");
-
-                return new UVFMasterkeyImpl(seeds, kdfSalt, initialSeedId, latestSeedId);
+                return new UVFMasterkeyImpl(payload);
             }
-            catch (Exception ex)
+            catch (JsonException ex)
+            {
+                Debug.WriteLine($"JsonException in FromDecryptedPayload: {ex.Message}");
+                throw new ArgumentException("Invalid JSON payload format for UVFMasterkey.", nameof(jsonPayload), ex);
+            }
+            catch (Exception ex) // Catch other potential errors during construction
             {
                 Debug.WriteLine($"Exception in FromDecryptedPayload: {ex.GetType().Name} - {ex.Message}");
-                throw;
+                throw; // Re-throw to indicate failure
             }
         }
 
         /// <summary>
-        /// Creates a UVF masterkey from raw key material.
+        /// Generates a UvfMasterkeyPayload object from the current master key state.
+        /// This is used when creating a new JWE vault.
         /// </summary>
-        /// <param name="rawKey">The raw key material</param>
-        /// <returns>A UVF masterkey</returns>
-        /// <exception cref="ArgumentNullException">If rawKey is null</exception>
-        /// <exception cref="ArgumentException">If rawKey is invalid</exception>
+        public UvfMasterkeyPayload ToMasterkeyPayload()
+        {
+            ThrowIfDestroyed();
+
+            var payload = new UvfMasterkeyPayload
+            {
+                UvfSpecVersion = 1, // Current version
+                Keys = new List<PayloadKey>()
+            };
+
+            if (_primaryEncryptionKey != null)
+            {
+                payload.Keys.Add(new PayloadKey
+                {
+                    Id = Jose.Base64Url.Encode(BitConverter.GetBytes(1)), // Example ID, consider a more robust ID generation
+                    Purpose = "org.cryptomator.masterkey",
+                    Alg = "AES-256-RAW",
+                    Value = Jose.Base64Url.Encode(_primaryEncryptionKey)
+                });
+            }
+
+            if (_primaryHmacKey != null)
+            {
+                payload.Keys.Add(new PayloadKey
+                {
+                    Id = Jose.Base64Url.Encode(BitConverter.GetBytes(2)), // Example ID
+                    Purpose = "org.cryptomator.hmacMasterkey",
+                    Alg = "HMAC-SHA256-RAW",
+                    Value = Jose.Base64Url.Encode(_primaryHmacKey)
+                });
+            }
+            
+            // Add other keys if the model supports them
+
+            if (_kdfSalt != null && _kdfSalt.Length > 0)
+            {
+                payload.Kdf = new PayloadKdf
+                {
+                    Type = "HKDF-SHA512", 
+                    Salt = Jose.Base64Url.Encode(_kdfSalt)
+                };
+            }
+
+            if (_seeds != null && _seeds.Any())
+            {
+                payload.Seeds = new List<PayloadSeed>();
+                // Need a way to get/store 'created' timestamp for seeds if they are to be fully represented.
+                // For now, creating minimal seed entries.
+                foreach (var seedEntry in _seeds)
+                {
+                    payload.Seeds.Add(new PayloadSeed
+                    {
+                        Id = Jose.Base64Url.Encode(BitConverter.GetBytes(seedEntry.Key).Reverse().ToArray()), // Convert to big-endian
+                        Value = Jose.Base64Url.Encode(seedEntry.Value),
+                        // Created = DateTime.UtcNow.ToString("o") // Placeholder for RFC3339 timestamp
+                        // This needs to be the original creation timestamp if available, or omitted if not meaningful
+                    });
+                }
+            }
+            
+            if (!string.IsNullOrEmpty(_rootDirIdValue))
+            {
+                payload.RootDirId = _rootDirIdValue; // Already Base64Url encoded
+            }
+
+            return payload;
+        }
+        
+        // Constructor from individual components (e.g. for generating a new key from scratch)
+        // This constructor needs to be able to generate the content that ToMasterkeyPayload() would serialize.
+        public UVFMasterkeyImpl(byte[] primaryEncKey, byte[]? primaryMacKey, Dictionary<int, byte[]>? seeds = null, byte[]? kdfSalt = null, string? rootDirIdBase64 = null, int initialSeed = 0, int latestSeed = 0)
+        {
+            _primaryEncryptionKey = (byte[])primaryEncKey.Clone();
+            _primaryHmacKey = primaryMacKey != null ? (byte[])primaryMacKey.Clone() : null;
+            
+            _seeds = new Dictionary<int, byte[]>();
+            if (seeds != null)
+            {
+                foreach (var entry in seeds)
+                {
+                    _seeds.Add(entry.Key, (byte[])entry.Value.Clone());
+                }
+            }
+            
+            _kdfSalt = kdfSalt != null ? (byte[])kdfSalt.Clone() : null;
+            _rootDirIdValue = rootDirIdBase64;
+            _initialSeedId = initialSeed;
+            _latestSeedId = latestSeed; // Or derive if seeds are provided
+
+            if (_seeds.Any() && initialSeed == 0 && latestSeed == 0)
+            {
+                 // Simplified logic: if seeds provided but no initial/latest, pick first/last by key
+                _initialSeedId = _seeds.Keys.Min();
+                _latestSeedId = _seeds.Keys.Max();
+            }
+            else if (!_seeds.Any()) // No seeds explicitly given, potentially use primary keys as a default "seed 0"
+            {
+                 // This part is speculative and depends on how a "seedless" masterkey is defined by UVF.
+                 // For now, if no seeds, initial/latest remain 0.
+            }
+        }
+
+        /// <summary>
+        /// Creates a UVF masterkey from raw key material (e.g. newly generated key bytes).
+        /// This method should prepare a UVFMasterkeyImpl instance that can then be
+        /// serialized via ToMasterkeyPayload() for vault creation.
+        /// </summary>
+        public static UVFMasterkey CreateFromRaw(byte[] rawKeyEncryption, byte[]? rawKeyMac)
+        {
+            if (rawKeyEncryption == null || rawKeyEncryption.Length == 0)
+                throw new ArgumentNullException(nameof(rawKeyEncryption));
+
+            // For a new key, we typically start with one seed (or no seeds if using direct keys)
+            // and no KDF salt unless explicitly defined for derivation from these raw keys.
+            // RootDirId can also be generated or left null initially.
+
+            // Example: Create a simple masterkey with the provided raw keys as the primary keys
+            // and no initial seeds or specific KDF salt.
+            // The 'purpose' and 'alg' for these keys would be set in ToMasterkeyPayload().
+            
+            // This constructor now sets the internal fields directly.
+            return new UVFMasterkeyImpl(rawKeyEncryption, rawKeyMac);
+        }
+        
+        // Overload CreateFromRaw to match the one in the interface UVFMasterkey
         public static UVFMasterkey CreateFromRaw(byte[] rawKey)
         {
-            if (rawKey == null)
-                throw new ArgumentNullException(nameof(rawKey));
+             // This existing static factory on the interface expects a single rawKey.
+             // How should this single rawKey be interpreted for UVFMasterkeyImpl which has distinct enc/mac keys?
+             // Option 1: Assume rawKey is a combined key (e.g., first 32 for enc, next 32 for mac)
+             // Option 2: Assume rawKey is only the encryption key, MAC key is derived or not used initially.
+             // Option 3: Throw not supported if a single undifferentiated key is insufficient.
 
-            try
-            {
-                // Convert raw key to JSON string
-                string json = Encoding.UTF8.GetString(rawKey);
+            if (rawKey == null) throw new ArgumentNullException(nameof(rawKey));
+            if (rawKey.Length < 32) throw new ArgumentException("Raw key material too short.", nameof(rawKey));
 
-                // Parse the JSON to create a UVFMasterkey
-                return FromDecryptedPayload(json);
-            }
-            catch (Exception ex) when (ex is JsonException || ex is ArgumentException || ex is FormatException || ex is DecoderFallbackException)
+            // Example: Assume rawKey is the primary encryption key, and HMAC key is derived or not set initially.
+            // This is a placeholder and needs to align with actual UVF spec for "raw key" import.
+            byte[] encKey = new byte[32];
+            Buffer.BlockCopy(rawKey, 0, encKey, 0, 32);
+            
+            byte[]? macKey = null;
+            if (rawKey.Length >= 64)
             {
-                throw new ArgumentException("Invalid raw key format", nameof(rawKey), ex);
+                macKey = new byte[32];
+                Buffer.BlockCopy(rawKey, 32, macKey, 0, 32);
             }
+            // This simplified CreateFromRaw(byte[] rawKey) needs to be carefully considered.
+            // The new constructor UVFMasterkeyImpl(byte[] primaryEncKey, byte[]? primaryMacKey, ...) is more explicit.
+            return new UVFMasterkeyImpl(encKey, macKey);
         }
 
         /// <summary>
@@ -218,7 +358,7 @@ namespace UvfLib.V3
         public int Version()
         {
             ThrowIfDestroyed();
-            return 1; // Current UVF version is 1
+            return 1; // Current UVF version is 1, as per payload UvfSpecVersion
         }
 
         /// <summary>
@@ -228,7 +368,7 @@ namespace UvfLib.V3
         public int GetCurrentRevision()
         {
             ThrowIfDestroyed();
-            return _latestSeed;
+            return _latestSeedId;
         }
 
         /// <summary>
@@ -239,8 +379,20 @@ namespace UvfLib.V3
         public UVFMasterkey Copy()
         {
             ThrowIfDestroyed();
+            // To properly copy, we should serialize to payload and deserialize,
+            // or ensure deep copy of all relevant fields.
+            // The constructor from payload (if public) or a dedicated copy constructor is better.
+            
+            // Simple field-wise copy (adjust if new fields are added):
             var seedsCopy = _seeds.ToDictionary(entry => entry.Key, entry => (byte[])entry.Value.Clone());
-            return new UVFMasterkeyImpl(seedsCopy, (byte[])_kdfSalt.Clone(), _initialSeed, _latestSeed);
+            var kdfSaltCopy = _kdfSalt != null ? (byte[])_kdfSalt.Clone() : null;
+            var primaryEncCopy = _primaryEncryptionKey != null ? (byte[])_primaryEncryptionKey.Clone() : null;
+            var primaryHmacCopy = _primaryHmacKey != null ? (byte[])_primaryHmacKey.Clone() : null;
+
+            if (primaryEncCopy == null) return null; // Cannot copy if essential key is missing
+
+            var copy = new UVFMasterkeyImpl(primaryEncCopy, primaryHmacCopy, seedsCopy, kdfSaltCopy, _rootDirIdValue, _initialSeedId, _latestSeedId);
+            return copy;
         }
 
         /// <summary>
@@ -250,9 +402,6 @@ namespace UvfLib.V3
         /// <returns>The derived key data</returns>
         public byte[] KeyData(string context)
         {
-            if (context == null)
-                throw new ArgumentNullException(nameof(context));
-
             return KeyData(Encoding.UTF8.GetBytes(context));
         }
 
@@ -264,10 +413,25 @@ namespace UvfLib.V3
         public byte[] KeyData(byte[] context)
         {
             ThrowIfDestroyed();
-            if (context == null)
-                throw new ArgumentNullException(nameof(context));
-
-            return HKDF.DeriveKey(HashAlgorithmName.SHA512, _seeds[_latestSeed], 32, _kdfSalt, context);
+            // This method's original logic might need to change significantly
+            // based on how keys are structured in the UVF payload.
+            // If "key data" refers to the primary encryption key directly:
+            if (_primaryEncryptionKey == null) throw new InvalidOperationException("Primary encryption key is not available.");
+            
+            // If KDF is specified in payload (e.g., HKDF-SHA512) and we have a salt,
+            // then KeyData should probably derive from _primaryEncryptionKey using HKDF.
+            if (_kdfSalt != null && _primaryEncryptionKey != null)
+            {
+                 // Assuming HKDF-SHA512 as per typical UVF usage.
+                 // The HKDFHelper.Derive method needs to be checked for compatibility.
+                 // It expects a master key (IKM), salt, context (info), and output length.
+                return HKDFHelper.HkdfSha512(_kdfSalt, _primaryEncryptionKey, context, _primaryEncryptionKey.Length);
+            }
+            
+            // If no KDF or salt, what should KeyData return? The raw primary key? Or is KDF always implied?
+            // For now, returning a clone of the primary encryption key if no KDF salt.
+            // This behavior needs to be confirmed against UVF specification for KeyData.
+            return (byte[])_primaryEncryptionKey.Clone();
         }
 
         /// <summary>
@@ -277,11 +441,13 @@ namespace UvfLib.V3
         public byte[] KeyID()
         {
             ThrowIfDestroyed();
-            if (!_seeds.TryGetValue(_initialSeed, out byte[] initialSeedValue))
-            {
-                throw new InvalidOperationException($"Seed value for initialSeed ID {_initialSeed} not found.");
-            }
-            return HKDF.DeriveKey(HashAlgorithmName.SHA512, initialSeedValue, 32, _kdfSalt, ROOT_DIRID_KDF_CONTEXT);
+            // A key ID should uniquely identify this master key.
+            // It could be a hash of the primary key(s) or a specific ID from the payload if available.
+            // The UVF payload does not have a single top-level "keyID" for the masterkey itself.
+            // It has IDs for individual keys within the "keys" array.
+            // For now, deriving from the primary encryption key.
+            if (_primaryEncryptionKey == null) throw new InvalidOperationException("Primary encryption key is not available for ID generation.");
+            return SHA256.HashData(_primaryEncryptionKey); // Example: SHA256 hash of primary enc key
         }
 
         /// <summary>
@@ -335,28 +501,22 @@ namespace UvfLib.V3
         {
             ThrowIfDestroyed();
 
-            var seedsObject = _seeds.ToDictionary(
-                entry => Base64Url.Encode(BitConverter.GetBytes(BinaryPrimitives.ReverseEndianness(entry.Key))),
-                entry => Base64Url.Encode(entry.Value)
-            );
-
-            var jsonObject = new
+            if (_primaryEncryptionKey == null) 
             {
-                fileFormat = "AES-256-GCM-32k",
-                nameFormat = "AES-SIV-512-B64URL",
-                kdf = "HKDF-SHA512",
-                seeds = seedsObject,
-                initialSeed = Base64Url.Encode(BitConverter.GetBytes(BinaryPrimitives.ReverseEndianness(_initialSeed))),
-                latestSeed = Base64Url.Encode(BitConverter.GetBytes(BinaryPrimitives.ReverseEndianness(_latestSeed))),
-                kdfSalt = Base64Url.Encode(_kdfSalt)
-            };
+                // Or throw, or return empty, depending on expected behavior if keys are missing.
+                return Array.Empty<byte>(); 
+            }
 
-            string json = System.Text.Json.JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions
+            // Concatenate primary encryption key and HMAC key (if it exists)
+            // This aligns more with typical GetRaw() expectations for an Api.Masterkey
+            int totalLength = _primaryEncryptionKey.Length + (_primaryHmacKey?.Length ?? 0);
+            byte[] rawKeyMaterial = new byte[totalLength];
+            Buffer.BlockCopy(_primaryEncryptionKey, 0, rawKeyMaterial, 0, _primaryEncryptionKey.Length);
+            if (_primaryHmacKey != null)
             {
-                WriteIndented = false
-            });
-
-            return Encoding.UTF8.GetBytes(json);
+                Buffer.BlockCopy(_primaryHmacKey, 0, rawKeyMaterial, _primaryEncryptionKey.Length, _primaryHmacKey.Length);
+            }
+            return rawKeyMaterial;
         }
 
         /// <summary>
@@ -366,15 +526,28 @@ namespace UvfLib.V3
         {
             if (!_destroyed)
             {
-                foreach (var entry in _seeds.ToList())
+                if (_primaryEncryptionKey != null)
                 {
-                    System.Security.Cryptography.CryptographicOperations.ZeroMemory(entry.Value);
-                    _seeds.Remove(entry.Key);
+                    System.Security.Cryptography.CryptographicOperations.ZeroMemory(_primaryEncryptionKey);
+                    _primaryEncryptionKey = null;
+                }
+                if (_primaryHmacKey != null)
+                {
+                    System.Security.Cryptography.CryptographicOperations.ZeroMemory(_primaryHmacKey);
+                    _primaryHmacKey = null;
                 }
 
-                _seeds.Clear();
+                foreach (var entry in _seeds.ToList()) // ToList() to allow modification during iteration
+                {
+                    if (entry.Value != null) System.Security.Cryptography.CryptographicOperations.ZeroMemory(entry.Value);
+                }
+                _seeds.Clear(); // Clears the dictionary
 
-                System.Security.Cryptography.CryptographicOperations.ZeroMemory(_kdfSalt);
+                if (_kdfSalt != null)
+                {
+                    System.Security.Cryptography.CryptographicOperations.ZeroMemory(_kdfSalt);
+                    _kdfSalt = null;
+                }
                 _destroyed = true;
             }
         }
@@ -415,7 +588,7 @@ namespace UvfLib.V3
         public int GetInitialRevision()
         {
             ThrowIfDestroyed();
-            return _initialSeed;
+            return _initialSeedId;
         }
 
         /// <summary>
@@ -437,9 +610,9 @@ namespace UvfLib.V3
         public byte[] GetRootDirId()
         {
             ThrowIfDestroyed();
-            if (!_seeds.TryGetValue(_initialSeed, out byte[] initialSeedValue))
+            if (!_seeds.TryGetValue(_initialSeedId, out byte[] initialSeedValue))
             {
-                throw new InvalidOperationException($"Seed value for initialSeed ID {_initialSeed} not found.");
+                throw new InvalidOperationException($"Seed value for initialSeed ID {_initialSeedId} not found.");
             }
             return HKDF.DeriveKey(HashAlgorithmName.SHA512, initialSeedValue, 32, _kdfSalt, ROOT_DIRID_KDF_CONTEXT);
         }
@@ -451,7 +624,7 @@ namespace UvfLib.V3
         public int GetFirstRevision()
         {
             ThrowIfDestroyed();
-            return _initialSeed;
+            return _initialSeedId;
         }
 
         /// <summary>
@@ -469,7 +642,7 @@ namespace UvfLib.V3
             try
             {
                 // Convert seedId from Base64URL to bytes
-                byte[] seedIdBytes = Base64Url.Decode(seedId);
+                byte[] seedIdBytes = Jose.Base64Url.Decode(seedId);
 
                 // Ensure we have 4 bytes for the seedId
                 if (seedIdBytes.Length < 4)

@@ -12,7 +12,7 @@ namespace UvfLib.Tests.Common
     public class DecryptingReadableByteChannelTest
     {
         private Mock<Cryptor> _cryptor;
-        private Mock<FileContentCryptor> _contentCryptor;
+        private Mock<IFileContentCryptor> _contentCryptor;
         private Mock<FileHeaderCryptor> _headerCryptor;
         private Mock<FileHeader> _header;
 
@@ -20,7 +20,7 @@ namespace UvfLib.Tests.Common
         public void Setup()
         {
             _cryptor = new Mock<Cryptor>();
-            _contentCryptor = new Mock<FileContentCryptor>();
+            _contentCryptor = new Mock<IFileContentCryptor>();
             _headerCryptor = new Mock<FileHeaderCryptor>();
             _header = new Mock<FileHeader>();
 

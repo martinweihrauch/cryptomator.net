@@ -5,7 +5,7 @@ namespace UvfLib.Api
     /// <summary>
     /// Provides operations to encrypt and decrypt file contents.
     /// </summary>
-    public interface FileContentCryptor
+    public interface IFileContentCryptor
     {
         /// <summary>
         /// Determines whether authentication can be skipped for performance reasons.
