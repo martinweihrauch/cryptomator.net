@@ -30,9 +30,11 @@ namespace UvfLib.Api
         /// <summary>
         /// Decrypts directory metadata.
         /// </summary>
-        /// <param name="ciphertext">The encrypted directory metadata</param>
+        /// <param name="ciphertext">The encrypted directory metadata (full content of dir.uvf, including its header).</param>
+        /// <param name="directorysOwnDirIdBytes">The raw DirId bytes of the directory to which this ciphertext belongs. This is crucial context for AAD.</param>
         /// <returns>The decrypted directory metadata</returns>
-        DirectoryMetadata DecryptDirectoryMetadata(byte[] ciphertext);
+        /// <exception cref="AuthenticationFailedException">If the ciphertext is unauthentic.</exception>
+        DirectoryMetadata DecryptDirectoryMetadata(byte[] ciphertext, byte[] directorysOwnDirIdBytes);
 
         /// <summary>
         /// Gets the directory path for the given directory metadata.

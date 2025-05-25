@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Text;
 using UvfLib.V3;
 using System.Text.Json;
+using System.Security.Cryptography;
 
 namespace UvfLib.Tests.Api
 {
@@ -14,8 +15,8 @@ namespace UvfLib.Tests.Api
     public class UVFMasterkeyTest
     {
         // Common test strings in Base64URL format (already properly formatted for testing)
-        private static readonly string INITIAL_SEED_B64 = "HDm38i";  // 473544690
-        private static readonly string LATEST_SEED_B64 = "QBsJFo";   // 1075513622
+        private static readonly string INITIAL_SEED_B64 = "HDm38i";  // Special 6-char ID
+        private static readonly string LATEST_SEED_B64 = "QBsJFo";   // Special 6-char ID
         private static readonly string KDF_SALT_B64 = "NIlr89R7FhochyP4yuXZmDqCnQ0dBB3UZ2D-6oiIjr8";
         private static readonly string SEED_VALUE1_B64 = "ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs";
         private static readonly string SEED_VALUE2_B64 = "Ln0sA6lQeuJl7PW1NWiFpTOTogKdJBOUmXJloaJa78Y";
@@ -28,20 +29,20 @@ namespace UvfLib.Tests.Api
         [DisplayName("Test Base64 Conversion")]
         public void TestBase64Conversion()
         {
-            // Test Base64Url.Decode
-            byte[] decodedBytes = Base64Url.Decode(KDF_SALT_B64);
+            // Test Base64Url.Decode (ensure it's accessible, might need to use Jose.Base64Url if UvfLib.Common.Base64Url is different)
+            byte[] decodedBytes = UvfLib.Common.Base64Url.Decode(KDF_SALT_B64);
             Assert.IsNotNull(decodedBytes);
             Assert.AreEqual(32, decodedBytes.Length);
 
             // Test other samples
-            Base64Url.Decode(SEED_VALUE1_B64);
-            Base64Url.Decode(SEED_VALUE2_B64);
-            Base64Url.Decode(TEST_SEED_VALUE_B64);
-            Base64Url.Decode(TEST_KDF_SALT_B64);
+            UvfLib.Common.Base64Url.Decode(SEED_VALUE1_B64);
+            UvfLib.Common.Base64Url.Decode(SEED_VALUE2_B64);
+            UvfLib.Common.Base64Url.Decode(TEST_SEED_VALUE_B64);
+            UvfLib.Common.Base64Url.Decode(TEST_KDF_SALT_B64);
         }
 
         [TestMethod]
-        [DisplayName("Test Manual JSON Parsing")]
+        [DisplayName("Test Manual JSON Parsing with SeedIdConverter")]
         public void TestManualJsonParsing()
         {
             string json = @"{
@@ -72,8 +73,8 @@ namespace UvfLib.Tests.Api
             Assert.IsNotNull(latestSeedB64);
             Assert.IsNotNull(kdfSaltB64);
 
-            int initialSeedId = SeedIdToInt(initialSeedB64);
-            int latestSeedId = SeedIdToInt(latestSeedB64);
+            int initialSeedId = SeedIdConverter.ToInt(initialSeedB64); // Use SeedIdConverter
+            int latestSeedId = SeedIdConverter.ToInt(latestSeedB64);   // Use SeedIdConverter
 
             Assert.AreEqual(473544690, initialSeedId);
             Assert.AreEqual(1075513622, latestSeedId);
@@ -82,7 +83,7 @@ namespace UvfLib.Tests.Api
             foreach (JsonProperty seedProp in root.GetProperty("seeds").EnumerateObject())
             {
                 string seedIdB64 = seedProp.Name;
-                int seedId = SeedIdToInt(seedIdB64);
+                int seedId = SeedIdConverter.ToInt(seedIdB64); // Use SeedIdConverter
 
                 if (seedIdB64 == "HDm38i")
                 {
@@ -99,7 +100,7 @@ namespace UvfLib.Tests.Api
             }
 
             // Fix URL-safe Base64 and decode
-            byte[] kdfSaltBytes = Base64Url.Decode(kdfSaltB64);
+            byte[] kdfSaltBytes = UvfLib.Common.Base64Url.Decode(kdfSaltB64);
             Assert.IsNotNull(kdfSaltBytes);
         }
 
@@ -108,32 +109,51 @@ namespace UvfLib.Tests.Api
         public void TestFromDecryptedPayload()
         {
             string json = @"{
-                ""fileFormat"": ""AES-256-GCM-32k"",
-                ""nameFormat"": ""AES-SIV-512-B64URL"",
-                ""seeds"": {
-                    ""HDm38i"": ""ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs"",
-                    ""gBryKw"": ""PiPoFgA5WUoziU9lZOGxNIu9egCI1CxKy3PurtWcAJ0"",
-                    ""QBsJFo"": ""Ln0sA6lQeuJl7PW1NWiFpTOTogKdJBOUmXJloaJa78Y""
+                ""uvf.spec.version"": 1,
+                ""keys"": [
+                    {
+                        ""id"": ""AQAAAA=="",
+                        ""purpose"": ""org.cryptomator.masterkey"",
+                        ""alg"": ""AES-256-RAW"",
+                        ""value"": ""AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=""
+                    }
+                ],
+                ""seeds"": [
+                    {
+                        ""id"": ""HDm38i"",
+                        ""value"": ""ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs"",
+                        ""created"": ""2023-01-01T00:00:00Z""
+                    }
+                ],
+                ""kdf"": {
+                    ""type"": ""HKDF-SHA512"",
+                    ""salt"": ""NIlr89R7FhochyP4yuXZmDqCnQ0dBB3UZ2D-6oiIjr8""
                 },
-                ""initialSeed"": ""HDm38i"",
-                ""latestSeed"": ""QBsJFo"",
-                ""kdf"": ""HKDF-SHA512"",
-                ""kdfSalt"": ""NIlr89R7FhochyP4yuXZmDqCnQ0dBB3UZ2D-6oiIjr8"",
-                ""org.example.customfield"": 42
+                ""rootDirId"": ""dummyForPayloadNotInvolvedInDerivationTest""
             }";
-            UVFMasterkey masterkey = UVFMasterkey.FromDecryptedPayload(json);
+            UVFMasterkey masterkey = UVFMasterkeyImpl.FromDecryptedPayload(json); // Assuming UVFMasterkeyImpl for static method access
 
-            Assert.AreEqual(473544690, masterkey.InitialSeed);
-            Assert.AreEqual(1075513622, masterkey.LatestSeed);
+            int expectedInitialSeedId = SeedIdConverter.ToInt("HDm38i"); // Use SeedIdConverter
+            int expectedLatestSeedId = SeedIdConverter.ToInt("HDm38i");  // Use SeedIdConverter
 
-            // Decode Base64URL strings to get expected values
-            byte[] expectedKdfSalt = Base64Url.Decode(KDF_SALT_B64);
-            byte[] expectedInitialSeedValue = Base64Url.Decode(SEED_VALUE1_B64);
-            byte[] expectedLatestSeedValue = Base64Url.Decode(SEED_VALUE2_B64);
+            Assert.AreEqual(expectedInitialSeedId, masterkey.InitialSeed);
+            Assert.AreEqual(expectedLatestSeedId, masterkey.LatestSeed);
 
+            byte[] expectedKdfSalt = UvfLib.Common.Base64Url.Decode("NIlr89R7FhochyP4yuXZmDqCnQ0dBB3UZ2D-6oiIjr8");
             CollectionAssert.AreEqual(expectedKdfSalt, masterkey.KdfSalt);
-            CollectionAssert.AreEqual(expectedInitialSeedValue, masterkey.Seeds[473544690]);
-            CollectionAssert.AreEqual(expectedLatestSeedValue, masterkey.Seeds[1075513622]);
+            
+            byte[] expectedSeed1Value = UvfLib.Common.Base64Url.Decode("ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs");
+            CollectionAssert.AreEqual(expectedSeed1Value, masterkey.Seeds[SeedIdConverter.ToInt("HDm38i")]); // Use SeedIdConverter
+            
+            // Test the GetRootDirId() derivation
+            byte[] initialSeedValue = masterkey.Seeds[masterkey.InitialSeed];
+            byte[] kdfSalt = masterkey.KdfSalt;
+            byte[] rootDirIdKdfContext = Encoding.ASCII.GetBytes("rootDirId"); // Mirrors the constant in UVFMasterkeyImpl
+
+            byte[] expectedDerivedRootDirIdBytes = System.Security.Cryptography.HKDF.DeriveKey(HashAlgorithmName.SHA512, initialSeedValue, 32, kdfSalt, rootDirIdKdfContext);
+            byte[] actualDerivedRootDirIdBytes = masterkey.GetRootDirId();
+
+            CollectionAssert.AreEqual(expectedDerivedRootDirIdBytes, actualDerivedRootDirIdBytes);
         }
 
         [TestMethod]
@@ -141,9 +161,9 @@ namespace UvfLib.Tests.Api
         public void TestSubkey()
         {
             Dictionary<int, byte[]> seeds = new Dictionary<int, byte[]> {
-                { -1540072521, Base64Url.Decode(TEST_SEED_VALUE_B64) }
+                { -1540072521, UvfLib.Common.Base64Url.Decode(TEST_SEED_VALUE_B64) }
             };
-            byte[] kdfSalt = Base64Url.Decode(TEST_KDF_SALT_B64);
+            byte[] kdfSalt = UvfLib.Common.Base64Url.Decode(TEST_KDF_SALT_B64);
 
             using (var masterkeyImpl = new TestUVFMasterkey(seeds, kdfSalt, -1540072521, -1540072521))
             {
@@ -162,9 +182,9 @@ namespace UvfLib.Tests.Api
         public void TestRootDirId()
         {
             Dictionary<int, byte[]> seeds = new Dictionary<int, byte[]> {
-                { -1540072521, Base64Url.Decode(TEST_SEED_VALUE_B64) }
+                { -1540072521, UvfLib.Common.Base64Url.Decode(TEST_SEED_VALUE_B64) }
             };
-            byte[] kdfSalt = Base64Url.Decode(TEST_KDF_SALT_B64);
+            byte[] kdfSalt = UvfLib.Common.Base64Url.Decode(TEST_KDF_SALT_B64);
 
             using (var masterkeyImpl = new TestUVFMasterkey(seeds, kdfSalt, -1540072521, -1540072521))
             {
@@ -174,36 +194,6 @@ namespace UvfLib.Tests.Api
                 string expected = ROOT_DIR_ID_B64.TrimEnd('=');
                 Assert.AreEqual(expected, actual);
             }
-        }
-
-        // Helper method to decode Base64 seed ID to int
-        private static int SeedIdToInt(string seedIdBase64)
-        {
-            // Handle the special case of HDm38i and similar 6-character strings
-            if (seedIdBase64.Length == 6)
-            {
-                // HDm38i -> 473544690
-                if (seedIdBase64 == "HDm38i") return 473544690;
-                // QBsJFo -> 1075513622
-                if (seedIdBase64 == "QBsJFo") return 1075513622;
-                // gBryKw -> 1946999083
-                if (seedIdBase64 == "gBryKw") return 1946999083;
-            }
-
-            // Standard decoding path
-            byte[] bytes = Base64Url.Decode(seedIdBase64);
-
-            // If we don't have enough bytes for an Int32, pad with zeros
-            if (bytes.Length < 4)
-            {
-                byte[] paddedBytes = new byte[4];
-                Array.Copy(bytes, 0, paddedBytes, 4 - bytes.Length, bytes.Length);
-                return BitConverter.ToInt32(paddedBytes);
-            }
-
-            return BitConverter.IsLittleEndian
-                ? BinaryPrimitives.ReadInt32BigEndian(bytes)
-                : BitConverter.ToInt32(bytes);
         }
     }
 

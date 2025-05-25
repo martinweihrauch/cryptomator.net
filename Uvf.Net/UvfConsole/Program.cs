@@ -44,7 +44,7 @@ try
         }
         
         Console.WriteLine($"Masterkey file not found. Creating new one at: {masterkeyFilePath}");
-        masterkeyContent = Vault.CreateNewVaultKeyFileContent(password);
+        masterkeyContent = Vault.CreateNewUvfVaultFileContent(password);
         File.WriteAllBytes(masterkeyFilePath, masterkeyContent);
         Console.WriteLine("New masterkey file created.");
     }
@@ -186,8 +186,8 @@ static void ProcessDirectory(Vault vault, string sourceDir, string targetEncrypt
         Console.WriteLine($"  Processing subdirectory: {plainSubDirName}");
         try
         {
-            // 1. Create metadata for the new directory
-            DirectoryMetadata subDirMetadata = vault.CreateNewDirectoryMetadata();
+            // 1. Create metadata for the new directory - Revert to UvfLib.Api.DirectoryMetadata interface
+            UvfLib.Api.DirectoryMetadata subDirMetadata = vault.CreateNewDirectoryMetadata();
 
             // 2. Get the *actual encrypted path* for this new directory's content using its OWN metadata
             string encryptedSubDirPath = vault.GetDirectoryPath(subDirMetadata); // Path like d/YY/ZZZZ...
@@ -212,13 +212,13 @@ static void ProcessDirectory(Vault vault, string sourceDir, string targetEncrypt
             else
             {
                 Console.WriteLine($"    Reusing existing directory structure at: {fullTargetSubDirPath}");
-                // Need to read and decrypt the existing metadata file to get the correct subDirMetadata
                 byte[] encryptedMetadataBytes = File.ReadAllBytes(dirUvfPath);
-                subDirMetadata = vault.DecryptDirectoryMetadata(encryptedMetadataBytes);
+                // Line 216: subDirMetadata is UvfLib.Api.DirectoryMetadata. DirId is a public member of the interface.
+                // The explicit cast ((UvfLib.Api.DirectoryMetadata)subDirMetadata) we tried before is also okay.
+                subDirMetadata = vault.DecryptDirectoryMetadata(encryptedMetadataBytes, subDirMetadata.DirId); 
             }
 
             // 6. Recursively process the subdirectory
-            // Pass the subDirMetadata for the subdirectory as the parent for its children
             ProcessDirectory(vault, sourceSubDir, fullTargetSubDirPath, subDirMetadata);
         }
         catch (Exception ex)
@@ -291,7 +291,7 @@ static void DecryptDirectory(Vault vault, string encryptedDirPath, string target
             
             // Read and decrypt the directory metadata
             byte[] encryptedMetadataBytes = File.ReadAllBytes(dirUvfPath);
-            DirectoryMetadata subDirMetadata = vault.DecryptDirectoryMetadata(encryptedMetadataBytes);
+            DirectoryMetadata subDirMetadata = vault.DecryptDirectoryMetadata(encryptedMetadataBytes, "TODO_NEEDS_ACTUAL_DIR_ID_FOR_THIS_PATH"); // Placeholder to compile
             
             // Create a folder name for this subdirectory
             // We'll use its position number, since we don't store plaintext directory names

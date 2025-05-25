@@ -75,5 +75,31 @@ namespace UvfLib.Common
 
             return result == 0;
         }
+
+        public static void ZeroMemory(Span<byte> buffer)
+        {
+            buffer.Clear(); // Equivalent to Arrays.fill(buffer, (byte)0);
+        }
+
+        /// <summary>
+        /// Compares two byte arrays in a way that is resistant to timing attacks.
+        /// </summary>
+        /// <param name="a">The first byte array.</param>
+        /// <param name="b">The second byte array.</param>
+        /// <returns>True if the arrays are equal, false otherwise.</returns>
+        public static bool TimeConstantEquals(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
+        {
+            if (a.Length != b.Length)
+            {
+                return false;
+            }
+
+            int diff = 0;
+            for (int i = 0; i < a.Length; i++)
+            {
+                diff |= a[i] ^ b[i];
+            }
+            return diff == 0;
+        }
     }
 }

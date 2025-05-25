@@ -8,6 +8,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using UvfLib.Tests.Common;
+using System.Linq;
 
 namespace UvfLib.Tests.V3
 {
@@ -23,21 +24,24 @@ namespace UvfLib.Tests.V3
         {
             CSPRNG = RandomNumberGenerator.Create();
 
-            // Setup masterkey with the same test data as in Java tests
-            string json = "{\n" +
-                "    \"fileFormat\": \"AES-256-GCM-32k\",\n" +
-                "    \"nameFormat\": \"AES-SIV-512-B64URL\",\n" +
-                "    \"seeds\": {\n" +
-                "        \"HDm38g\": \"ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs\",\n" +
-                "        \"gBryKw\": \"PiPoFgA5WUoziU9lZOGxNIu9egCI1CxKy3PurtWcAJ0\",\n" +
-                "        \"QBsJFg\": \"Ln0sA6lQeuJl7PW1NWiFpTOTogKdJBOUmXJloaJa78Y\"\n" +
-                "    },\n" +
-                "    \"initialSeed\": \"HDm38i\",\n" +
-                "    \"latestSeed\": \"QBsJFo\",\n" +
-                "    \"kdf\": \"HKDF-SHA512\",\n" +
-                "    \"kdfSalt\": \"NIlr89R7FhochyP4yuXZmDqCnQ0dBB3UZ2D-6oiIjr8\",\n" +
-                "    \"org.example.customfield\": 42\n" +
-                "}";
+            // Setup masterkey with the new JWE payload format
+            string json = @"{
+                ""uvf.spec.version"": 1,
+                ""keys"": [
+                    { ""id"": ""AQAAAA=="", ""purpose"": ""org.cryptomator.masterkey"", ""alg"": ""AES-256-RAW"", ""value"": ""AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="" },
+                    { ""id"": ""AgAAAA=="", ""purpose"": ""org.cryptomator.hmacMasterkey"", ""alg"": ""HMAC-SHA256-RAW"", ""value"": ""BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="" }
+                ],
+                ""seeds"": [
+                    { ""id"": ""HDm38i"", ""value"": ""ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs"", ""created"": ""2023-01-01T00:00:00Z"" },
+                    { ""id"": ""gBryKw"", ""value"": ""PiPoFgA5WUoziU9lZOGxNIu9egCI1CxKy3PurtWcAJ0"", ""created"": ""2023-01-02T00:00:00Z"" },
+                    { ""id"": ""QBsJFo"", ""value"": ""Ln0sA6lQeuJl7PW1NWiFpTOTogKdJBOUmXJloaJa78Y"", ""created"": ""2023-01-03T00:00:00Z"" }
+                ],
+                ""kdf"": {
+                    ""type"": ""HKDF-SHA512"",
+                    ""salt"": ""NIlr89R7FhochyP4yuXZmDqCnQ0dBB3UZ2D-6oiIjr8""
+                },
+                ""rootDirId"": ""dummyIntegrationTestRootDirId"" 
+            }";
 
             masterkey = UVFMasterkey.FromDecryptedPayload(json);
             cryptor = CryptorProvider.ForScheme(CryptorProvider.Scheme.UVF_DRAFT).Provide(masterkey, CSPRNG);
@@ -68,36 +72,34 @@ namespace UvfLib.Tests.V3
         }
 
         [TestMethod]
-        [DisplayName("Encrypt dir.uvf for root directory")]
-        public void TestRootDirUvfEncryption()
+        [DisplayName("Encrypt and Decrypt dir.uvf for root directory")]
+        public void TestRootDirUvfEncryptionAndDecryption()
         {
+            // --- Encryption Part ---
             var rootDirMetadata = cryptor.DirectoryContentCryptor().RootDirectoryMetadata();
-            byte[] result = cryptor.DirectoryContentCryptor().EncryptDirectoryMetadata(rootDirMetadata);
+            byte[] encryptedResult = cryptor.DirectoryContentCryptor().EncryptDirectoryMetadata(rootDirMetadata);
 
             // Check UVF0 magic bytes
             byte[] magicBytes = new byte[4];
-            Array.Copy(result, magicBytes, 4);
-            CollectionAssert.AreEqual(new byte[] { 0x75, 0x76, 0x66, 0x00 }, magicBytes, "Expected to begin with UVF0 magic bytes");
+            Array.Copy(encryptedResult, magicBytes, 4);
+            CollectionAssert.AreEqual(new byte[] { 0x75, 0x76, 0x66, 0x00 }, magicBytes, "Expected to begin with UVF0 magic bytes (Encryption)");
 
             // Check seed 
             byte[] seedBytes = new byte[4];
-            Array.Copy(result, 4, seedBytes, 0, 4);
-            byte[] expectedSeed = Convert.FromBase64String("HDm38i==").AsSpan().Slice(0, 4).ToArray();
-            CollectionAssert.AreEqual(expectedSeed, seedBytes, "Expected seed to be initial seed");
-        }
+            Array.Copy(encryptedResult, 4, seedBytes, 0, 4);
+            byte[] expectedSeed = BitConverter.GetBytes(UvfLib.Common.SeedIdConverter.ToInt("HDm38i")).Reverse().Take(4).ToArray();
+            CollectionAssert.AreEqual(expectedSeed, seedBytes, "Expected seed to be the one from GetFirstRevision (HDm38i) (Encryption)");
 
-        [TestMethod]
-        [DisplayName("Decrypt dir.uvf for root directory")]
-        public void TestRootDirUvfDecryption()
-        {
-            byte[] input = Convert.FromBase64String("dXZmABw5t/Ievp74RjIgGHn4+/Zt32dmqmYhmHiPNQ5Q2z+WYb4z8NbnynTgMWlGBCc65bTqSt4Pqhj9EGhrn8KVbQqzBVWcZkLVr4tntfvgZoVJYkeD5w9mJMwRlQJwqiC0uR+Lk2aBT2cfdPT92e/6+t7nlvoYtoahMtowCqY=");
-            DirectoryMetadata result = cryptor.DirectoryContentCryptor().DecryptDirectoryMetadata(input);
+            // --- Decryption Part ---
+            // Cast rootDirMetadata to DirectoryMetadataImpl to access GetDirIdBytes for AAD
+            DirectoryMetadataImpl rootDirMetadataImpl = DirectoryMetadataImpl.Cast(rootDirMetadata);
+            DirectoryMetadata decryptedResult = cryptor.DirectoryContentCryptor().DecryptDirectoryMetadata(encryptedResult, rootDirMetadataImpl.GetDirIdBytes());
 
-            Assert.IsInstanceOfType(result, typeof(DirectoryMetadataImpl));
-            DirectoryMetadataImpl metadata = (DirectoryMetadataImpl)result;
+            Assert.IsInstanceOfType(decryptedResult, typeof(DirectoryMetadataImpl));
+            DirectoryMetadataImpl metadata = (DirectoryMetadataImpl)decryptedResult;
 
-            CollectionAssert.AreEqual(masterkey.GetRootDirId(), metadata.DirId());
-            Assert.AreEqual(masterkey.GetFirstRevision(), metadata.SeedId());
+            CollectionAssert.AreEqual(masterkey.GetRootDirId(), metadata.GetDirIdBytes(), "Decrypted DirId does not match masterkey's RootDirId."); // Use GetDirIdBytes for comparison
+            Assert.AreEqual(masterkey.GetFirstRevision(), metadata.SeedId, "Decrypted SeedId does not match masterkey's FirstRevision."); // Use SeedId property
         }
 
         [TestMethod]
@@ -115,8 +117,10 @@ namespace UvfLib.Tests.V3
             // Check seed 
             byte[] seedBytes = new byte[4];
             Array.Copy(result, 4, seedBytes, 0, 4);
-            byte[] expectedSeed = Convert.FromBase64String("QBsJFo==").AsSpan().Slice(0, 4).ToArray();
-            CollectionAssert.AreEqual(expectedSeed, seedBytes, "Expected seed to be latest seed");
+            // Expected seed should be the latest one, derived via SeedIdConverter
+            int latestSeedId = UvfLib.Common.SeedIdConverter.ToInt("QBsJFo"); // "QBsJFo" is latest by timestamp
+            byte[] expectedSeed = BitConverter.GetBytes(latestSeedId).Reverse().Take(4).ToArray(); // Big Endian bytes of the latest seed ID
+            CollectionAssert.AreEqual(expectedSeed, seedBytes, "Expected seed to be latest seed (QBsJFo)");
         }
 
         [TestMethod]

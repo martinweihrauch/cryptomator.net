@@ -41,5 +41,15 @@ namespace UvfLib.V3
         /// Size of a chunk (nonce + payload + tag)
         /// </summary>
         public const int CHUNK_SIZE = GCM_NONCE_SIZE + PAYLOAD_SIZE + GCM_TAG_SIZE;
+
+        /// <summary>
+        /// Standard size for Directory IDs in bytes.
+        /// </summary>
+        public const int DIR_ID_SIZE = 32;
+
+        /// <summary>
+        /// Prefix for vault-internal directory paths.
+        /// </summary>
+        public const string VAULT_DIR_PREFIX = "d/";
     }
 } 

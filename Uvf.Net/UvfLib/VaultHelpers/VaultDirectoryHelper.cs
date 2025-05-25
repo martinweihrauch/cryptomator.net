@@ -30,14 +30,6 @@ namespace UvfLib.VaultHelpers
             return cryptor.DirectoryContentCryptor().EncryptDirectoryMetadata(metadata);
         }
 
-        public static DirectoryMetadata DecryptDirectoryMetadataInternal(Cryptor cryptor, byte[] encryptedMetadata)
-        {
-            if (cryptor?.DirectoryContentCryptor() == null) throw new InvalidOperationException("Directory cryptor not available.");
-            if (encryptedMetadata == null) throw new ArgumentNullException(nameof(encryptedMetadata));
-
-            return cryptor.DirectoryContentCryptor().DecryptDirectoryMetadata(encryptedMetadata);
-        }
-
         public static DirectoryMetadata CreateNewDirectoryMetadataInternal(Cryptor cryptor)
         {
             if (cryptor?.DirectoryContentCryptor() == null) throw new InvalidOperationException("Directory cryptor not available.");

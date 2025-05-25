@@ -12,6 +12,7 @@ using UvfLib.Common;
 using UvfLib.Jwe; // For UvfMasterkeyPayload and its sub-classes
 using Jose; // For Base64Url if not using a custom one
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization; // For DateTimeStyles
 
 namespace UvfLib.V3
 {
@@ -42,7 +43,7 @@ namespace UvfLib.V3
         // InitialSeed and LatestSeed might need re-evaluation based on how they are determined from payload.seeds
         public int InitialSeed => _initialSeedId;
         public int LatestSeed => _latestSeedId;
-        public byte[] RootDirId => !string.IsNullOrEmpty(_rootDirIdValue) ? Jose.Base64Url.Decode(_rootDirIdValue) : Array.Empty<byte>();
+        public byte[] RootDirId => GetRootDirId(); // Always return the derived RootDirId, ensuring consistency
         public int FirstRevision => GetFirstRevision(); // This likely maps to initialSeedId
 
         // Properties to implement Masterkey interface
@@ -113,33 +114,75 @@ namespace UvfLib.V3
                 _kdfSalt = Jose.Base64Url.Decode(payload.Kdf.Salt);
             }
 
-            // Parse seeds
-            if (payload.Seeds != null)
+            // Parse seeds and determine initial/latest based on Created timestamps
+            if (payload.Seeds != null && payload.Seeds.Any())
             {
-                foreach (var seed in payload.Seeds)
+                DateTimeOffset earliestTime = DateTimeOffset.MaxValue;
+                DateTimeOffset latestTime = DateTimeOffset.MinValue;
+                int tempInitialSeedId = 0;
+                int tempLatestSeedId = 0;
+                bool firstSeedProcessed = false;
+
+                foreach (var seedEntry in payload.Seeds)
                 {
-                    if (!string.IsNullOrEmpty(seed.Id) && !string.IsNullOrEmpty(seed.Value))
+                    if (!string.IsNullOrEmpty(seedEntry.Id) && !string.IsNullOrEmpty(seedEntry.Value) && !string.IsNullOrEmpty(seedEntry.Created))
                     {
-                        byte[] seedIdBytes = Jose.Base64Url.Decode(seed.Id);
-                        if (seedIdBytes.Length >= 4) // Assuming int32
+                        int currentSeedId = SeedIdConverter.ToInt(seedEntry.Id);
+                        byte[] currentSeedValue = Jose.Base64Url.Decode(seedEntry.Value);
+                        _seeds[currentSeedId] = currentSeedValue;
+
+                        if (DateTimeOffset.TryParseExact(seedEntry.Created, "yyyy-MM-ddTHH:mm:ssZ", 
+                                CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, 
+                                out DateTimeOffset createdTime))
                         {
-                            int seedId = BitConverter.ToInt32(seedIdBytes, 0);
-                            if (BitConverter.IsLittleEndian) // Convert from big-endian
+                            if (!firstSeedProcessed)
                             {
-                                seedId = System.Net.IPAddress.NetworkToHostOrder(seedId);
+                                earliestTime = createdTime;
+                                latestTime = createdTime;
+                                tempInitialSeedId = currentSeedId;
+                                tempLatestSeedId = currentSeedId;
+                                firstSeedProcessed = true;
                             }
-                            byte[] seedValue = Jose.Base64Url.Decode(seed.Value);
-                            _seeds[seedId] = seedValue;
+                            else
+                            {
+                                if (createdTime < earliestTime)
+                                {
+                                    earliestTime = createdTime;
+                                    tempInitialSeedId = currentSeedId;
+                                }
+                                if (createdTime > latestTime)
+                                {
+                                    latestTime = createdTime;
+                                    tempLatestSeedId = currentSeedId;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // Handle or log parsing error for Created timestamp if necessary
+                            // For now, if a timestamp is invalid, this seed won't be considered for initial/latest
+                            // based on time. This could lead to fallback to min/max if all timestamps are bad.
+                             Debug.WriteLine($"Warning: Could not parse Created timestamp '{seedEntry.Created}' for seed ID '{seedEntry.Id}'.");
                         }
                     }
                 }
-            }
-
-            // Determine initial and latest seed IDs
-            if (_seeds.Any())
-            {
-                _initialSeedId = _seeds.Keys.Min();
-                _latestSeedId = _seeds.Keys.Max();
+                
+                if(firstSeedProcessed) // Ensure at least one valid seed with timestamp was processed
+                {
+                    _initialSeedId = tempInitialSeedId;
+                    _latestSeedId = tempLatestSeedId;
+                }
+                else if (_seeds.Any()) // Fallback if no valid Created timestamps, revert to Min/Max of numerical IDs
+                {
+                    Debug.WriteLine("Warning: No valid Created timestamps found for seeds. Falling back to Min/Max of seed IDs for initial/latest.");
+                    _initialSeedId = _seeds.Keys.Min();
+                    _latestSeedId = _seeds.Keys.Max();
+                }
+                else // No seeds at all
+                {
+                    _initialSeedId = 0;
+                    _latestSeedId = 0;
+                }
             }
             else
             {
@@ -610,9 +653,17 @@ namespace UvfLib.V3
         public byte[] GetRootDirId()
         {
             ThrowIfDestroyed();
-            if (!_seeds.TryGetValue(_initialSeedId, out byte[] initialSeedValue))
+            if (!_seeds.TryGetValue(_initialSeedId, out byte[]? initialSeedValue))
             {
                 throw new InvalidOperationException($"Seed value for initialSeed ID {_initialSeedId} not found.");
+            }
+            if (initialSeedValue == null) // Should not happen if TryGetValue succeeds and value is not null
+            {
+                 throw new InvalidOperationException($"Initial seed value for ID {_initialSeedId} is null.");
+            }
+            if (_kdfSalt == null)
+            {
+                throw new InvalidOperationException("KDF salt is not available for RootDirId derivation.");
             }
             return HKDF.DeriveKey(HashAlgorithmName.SHA512, initialSeedValue, 32, _kdfSalt, ROOT_DIRID_KDF_CONTEXT);
         }

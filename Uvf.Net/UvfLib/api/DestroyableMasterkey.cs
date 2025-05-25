@@ -9,6 +9,6 @@ namespace UvfLib.Api
         /// Gets a copy of the raw key material. The caller is responsible for securely erasing this data when done.
         /// </summary>
         /// <returns>The raw key material</returns>
-        byte[] GetRawKey();
+        byte[] GetRaw();
     }
 }

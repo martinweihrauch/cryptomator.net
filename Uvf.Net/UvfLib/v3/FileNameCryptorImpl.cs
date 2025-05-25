@@ -14,7 +14,7 @@ namespace UvfLib.V3
     {
         private static readonly byte[] SIV_KDF_CONTEXT = Encoding.ASCII.GetBytes("siv");
         private static readonly byte[] HMAC_KDF_CONTEXT = Encoding.ASCII.GetBytes("hmac");
-        private static readonly byte[] DIR_HASH_KDF_CONTEXT = Encoding.ASCII.GetBytes("directoryId");
+        private static readonly byte[] DIR_HASH_KDF_CONTEXT = Encoding.ASCII.GetBytes("dirHash");
 
         private readonly RevolvingMasterkey _masterkey;
         private readonly RandomNumberGenerator _random;

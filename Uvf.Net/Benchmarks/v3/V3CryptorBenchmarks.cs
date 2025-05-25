@@ -22,12 +22,11 @@ namespace UvfLib.Benchmarks.v3
         // --- Masterkey Methods (Delegated) ---
         public DestroyableSecretKey GetEncKey() => _wrappedKey.GetEncKey();
         public DestroyableSecretKey GetMacKey() => _wrappedKey.GetMacKey();
-        public byte[] GetEncoded() => _wrappedKey.GetEncoded();
+        public byte[] GetRaw() => _wrappedKey.GetRaw();
         public void Destroy() => _wrappedKey.Destroy();
         public bool IsDestroyed() => _wrappedKey.IsDestroyed();
         public void Dispose() => _wrappedKey.Dispose();
-        public byte[] GetRootDirId() => _wrappedKey.RootDirId(); // Delegate RootDirId
-        public byte[] GetRaw() => _wrappedKey.GetRaw(); // Implement missing GetRaw
+        public byte[] GetRootDirId() => _wrappedKey.GetRootDirId();
 
 
         // --- RevolvingMasterkey Specific Methods (Minimal Implementation for Benchmark) ---
@@ -51,7 +50,7 @@ namespace UvfLib.Benchmarks.v3
         public DestroyableSecretKey SubKey(int seedId, int size, byte[] context, string algorithm)
         {
             // Simple HKDF derivation using perpetual key for benchmark setup
-            byte[] master = _wrappedKey.GetEncoded();
+            byte[] master = _wrappedKey.GetRaw();
             byte[] derived = HKDF.DeriveKey(HashAlgorithmName.SHA256, master, size, salt: context, info: System.Text.Encoding.UTF8.GetBytes($"BenchmarkDerivation_{seedId}"));
             System.Security.Cryptography.CryptographicOperations.ZeroMemory(master); // Zero out the copy
             return new DestroyableSecretKey(derived, algorithm);

@@ -21,6 +21,10 @@ using UvfLib.Jwe; // For JweVaultManager and UvfMasterkeyPayload
 using System.IO; // For File operations
 using System.Text; // For Encoding
 using System.Text.Json; // For JsonSerializer
+using System.Collections.Generic; // Added for Dictionary and List
+using System.Linq; // Added for Linq operations if needed
+using UvfLib.V3; // Added for UVFMasterkeyImpl constants if any, and HKDFHelper
+using System.Buffers.Binary; // Added for BinaryPrimitives
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UvfLib.Tests")]
 
@@ -64,6 +68,9 @@ namespace UvfLib
         {
             _cryptor = cryptor ?? throw new ArgumentNullException(nameof(cryptor));
             _perpetualMasterkey = masterkey ?? throw new ArgumentNullException(nameof(masterkey));
+            // Always adapt PerpetualMasterkey to a RevolvingMasterkey (UVFMasterkeyImpl) for this constructor
+            // The null second argument to UVFMasterkeyImpl for kdfSalt is a placeholder, review if it's appropriate for legacy adaptation.
+            _revolvingMasterkey = new V3.UVFMasterkeyImpl(masterkey.GetRaw(), null); 
         }
 
         /// <summary>
@@ -118,34 +125,91 @@ namespace UvfLib
 
         // Static utility for key file creation (doesn't require a Vault instance)
         /// <summary>
-        /// Creates the encrypted master key file content for a new vault.
+        /// Creates the encrypted master key file content for a new LEGACY Cryptomator vault.
         /// </summary>
         /// <param name="password">The password for the new vault.</param>
         /// <param name="pepper">Optional pepper to use during key derivation. If null, an empty pepper is used.</param>
         /// <returns>A byte array containing the encrypted master key file data.</returns>
         /// <exception cref="ArgumentNullException">If password is null.</exception>
         /// <exception cref="CryptoException">If key generation or encryption fails.</exception>
-        public static byte[] CreateNewVaultKeyFileContent(string password, byte[]? pepper = null)
+        public static byte[] CreateNewLegacyVaultKeyFileContent(string password, byte[]? pepper = null)
         {
             // Delegate to VaultKeyHelper
             return VaultKeyHelper.CreateNewVaultKeyFileContentInternal(password, pepper);
         }
 
         /// <summary>
-        /// Creates the encrypted JWE content for a new UVF vault file.
+        /// Creates the encrypted JWE content (UTF-8 bytes) for a new UVF vault file.
+        /// This is the content for "masterkey.cryptomator" or "vault.uvf" in the new format.
         /// </summary>
         /// <param name="password">The password for the new vault.</param>
-        /// <returns>A byte array containing the encrypted UVF vault file data (JWE string).</returns>
+        /// <returns>A byte array containing the encrypted UVF vault file data (JWE string as UTF-8 bytes).</returns>
         public static byte[] CreateNewUvfVaultFileContent(string password)
         {
-            // Delegate to VaultKeyHelper, pepper is not used for JWE in this simplified setup
-            return VaultKeyHelper.CreateNewVaultKeyFileContentInternal(password, null);
+            if (string.IsNullOrEmpty(password)) throw new ArgumentNullException(nameof(password));
+
+            using var rng = RandomNumberGenerator.Create();
+
+            byte[] primaryEncryptionKey = new byte[32];
+            rng.GetBytes(primaryEncryptionKey);
+            byte[] primaryHmacKey = new byte[32];
+            rng.GetBytes(primaryHmacKey);
+            byte[] seedValue = new byte[32];
+            rng.GetBytes(seedValue);
+            int initialSeedId = 1;
+            byte[] kdfSaltForSeeds = new byte[32];
+            rng.GetBytes(kdfSaltForSeeds);
+            byte[] rootDirIdContext = Encoding.ASCII.GetBytes("rootDirId");
+            byte[] rootDirId = HKDF.DeriveKey(HashAlgorithmName.SHA512, seedValue, UvfLib.V3.Constants.DIR_ID_SIZE, kdfSaltForSeeds, rootDirIdContext);
+
+            byte[] initialSeedIdBytes = new byte[4];
+            BinaryPrimitives.WriteInt32BigEndian(initialSeedIdBytes, initialSeedId);
+
+            var payload = new UvfMasterkeyPayload
+            {
+                UvfSpecVersion = 1,
+                Keys = new List<PayloadKey>
+                {
+                    new PayloadKey 
+                    {
+                        Id = "1", 
+                        Purpose = "org.cryptomator.masterkey", 
+                        Alg = "AES-256-RAW", 
+                        Value = Base64Url.Encode(primaryEncryptionKey)
+                    },
+                    new PayloadKey 
+                    {
+                        Id = "2", 
+                        Purpose = "org.cryptomator.hmacMasterkey", 
+                        Alg = "HMAC-SHA256-RAW", 
+                        Value = Base64Url.Encode(primaryHmacKey)
+                    }
+                },
+                Kdf = new PayloadKdf
+                {
+                    Type = "HKDF-SHA512",
+                    Salt = Base64Url.Encode(kdfSaltForSeeds)
+                },
+                Seeds = new List<PayloadSeed>
+                {
+                    new PayloadSeed
+                    {
+                        Id = Base64Url.Encode(initialSeedIdBytes),
+                        Value = Base64Url.Encode(seedValue),
+                        Created = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                    }
+                },
+                RootDirId = Base64Url.Encode(rootDirId)
+            };
+
+            string jweString = JweVaultManager.CreateVault(payload, password);
+            return Encoding.UTF8.GetBytes(jweString);
         }
 
         /// <summary>
-        /// Creates a new UVF vault file (vault.uvf) at the specified path.
+        /// Creates a new UVF vault file (e.g., masterkey.cryptomator or vault.uvf) at the specified path.
         /// </summary>
-        /// <param name="filePath">The path where the vault.uvf file will be created.</param>
+        /// <param name="filePath">The path where the UVF vault file will be created.</param>
         /// <param name="password">The password for the new vault.</param>
         public static void CreateNewUvfVault(string filePath, string password)
         {
@@ -155,49 +219,53 @@ namespace UvfLib
         }
 
         /// <summary>
-        /// Loads a UVF vault using its JWE-formatted key file and password.
+        /// Loads a UVF vault using its JWE-formatted key file content and password.
         /// </summary>
-        /// <param name="uvfFilePath">The path to the vault.uvf file.</param>
+        /// <param name="uvfFileContent">The byte content of the UVF vault file (JWE string).</param>
         /// <param name="password">The vault password.</param>
         /// <returns>An initialized Vault instance ready for operations.</returns>
-        public static Vault LoadUvfVault(string uvfFilePath, string password)
+        public static Vault LoadUvfVault(byte[] uvfFileContent, string password)
         {
-            if (string.IsNullOrEmpty(uvfFilePath)) throw new ArgumentNullException(nameof(uvfFilePath));
-            if (!File.Exists(uvfFilePath)) throw new FileNotFoundException("UVF vault file not found.", uvfFilePath);
+            if (uvfFileContent == null || uvfFileContent.Length == 0) throw new ArgumentNullException(nameof(uvfFileContent));
             if (string.IsNullOrEmpty(password)) throw new ArgumentNullException(nameof(password));
 
-            string jweString = File.ReadAllText(uvfFilePath, Encoding.UTF8);
+            string jweString = Encoding.UTF8.GetString(uvfFileContent);
             UVFMasterkey? uvfMasterkey = null;
+            Api.Cryptor? cryptor = null; 
             try
             {
                 UvfMasterkeyPayload payload = JweVaultManager.LoadVaultPayload(jweString, password);
-                string jsonPayloadString = JsonSerializer.Serialize(payload); 
                 
-                // Api.UVFMasterkey.FromDecryptedPayload is the entry point that leads to UVFMasterkeyImpl
+                // Instead of re-serializing, pass the payload object directly if UVFMasterkeyImpl can accept it.
+                // For now, assuming FromDecryptedPayload expects JSON string as per current V3.UVFMasterkeyImpl.
+                string jsonPayloadString = JsonSerializer.Serialize(payload, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                
+                // Api.UVFMasterkey.FromDecryptedPayload is the entry point
+                // This will internally create a V3.UVFMasterkeyImpl instance.
                 uvfMasterkey = (UVFMasterkey)Api.UVFMasterkey.FromDecryptedPayload(jsonPayloadString);
 
-                // Assuming UVF_DRAFT is the correct scheme for your V3 implementation
                 CryptorProvider provider = CryptorProvider.ForScheme(CryptorProvider.Scheme.UVF_DRAFT);
-                Cryptor cryptor = provider.Provide(uvfMasterkey, CsPrng);
+                using var csprng = RandomNumberGenerator.Create();
+                cryptor = provider.Provide(uvfMasterkey, csprng);
 
-                // Use the constructor that primarily takes RevolvingMasterkey for UVF
                 return new Vault(cryptor, uvfMasterkey);
             }
             catch (Exception ex) when (ex is Jose.JoseException || ex is JsonException || ex is InvalidOperationException || ex is ArgumentException)
             {
                 (uvfMasterkey as IDisposable)?.Dispose();
-                // Wrap in a standard library exception type if desired, e.g., MasterkeyLoadingFailedException
-                throw new MasterkeyLoadingFailedException($"Failed to load UVF vault from {uvfFilePath}. Check password or file integrity.", ex);
+                (cryptor as IDisposable)?.Dispose();
+                throw new MasterkeyLoadingFailedException("Failed to load UVF vault. Check password or file integrity.", ex);
             }
             catch
             {
                 (uvfMasterkey as IDisposable)?.Dispose();
-                throw; // Re-throw other unexpected exceptions
+                (cryptor as IDisposable)?.Dispose();
+                throw; 
             }
         }
 
         /// <summary>
-        /// Loads a vault's Cryptor instance using the master key file content and password (Cryptomator old format).
+        /// Loads a Legacy Cryptomator vault's Cryptor instance using the master key file content and password.
         /// </summary>
         /// <param name="encryptedKeyFileContent">The byte content of the master key file.</param>
         /// <param name="password">The vault password.</param>
@@ -215,47 +283,55 @@ namespace UvfLib
             if (password == null) throw new ArgumentNullException(nameof(password));
             byte[] effectivePepper = pepper ?? Array.Empty<byte>();
 
-            MasterkeyFile masterkeyFile = MasterkeyFile.FromJson(encryptedKeyFileContent);
-            var keyAccessor = new MasterkeyFileAccess(effectivePepper, CsPrng);
+            // This path uses MasterkeyFileAccess for the old format.
+            MasterkeyFile masterkeyFile = MasterkeyFile.FromJson(encryptedKeyFileContent); 
+            var keyAccessor = new MasterkeyFileAccess(effectivePepper, RandomNumberGenerator.Create());
             PerpetualMasterkey perpetualMasterkey = keyAccessor.Unlock(masterkeyFile, password);
-            RevolvingMasterkey? revolving = null;
+            
+            // Attempt to adapt PerpetualMasterkey to RevolvingMasterkey for CryptorProvider
+            // This is a simplification; a full adapter might be more complex or not fully compatible.
+            RevolvingMasterkey? revolvingAdapter = null;
+            Api.Cryptor? cryptor = null;
             try 
             {
-                byte[] kdfSalt = new byte[32];
-                CsPrng.GetBytes(kdfSalt);
-                int seedId = 1;
-                byte[] rawKey = perpetualMasterkey.GetRaw();
+                byte[] rawKey = perpetualMasterkey.GetRaw(); // Changed from GetRawKey()
                 try
                 {
-                    Dictionary<int, byte[]> seeds = new Dictionary<int, byte[]> { { seedId, rawKey } };
-                    revolving = new UvfLib.V3.UVFMasterkeyImpl(seeds, kdfSalt, seedId, seedId);
+                    var seeds = new Dictionary<int, byte[]> { { 0, rawKey } }; 
+                    byte[] dummyKdfSalt = new byte[32]; 
+                    revolvingAdapter = new V3.UVFMasterkeyImpl(seeds, dummyKdfSalt, 0, 0);
                 }
                 finally
                 {
                     UvfLib.Common.CryptographicOperations.ZeroMemory(rawKey);
                 }
-                CryptorProvider.Scheme scheme;
-                if (masterkeyFile.VaultVersion >= 8)
-                {
-                    scheme = CryptorProvider.Scheme.UVF_DRAFT;
+
+                // For legacy, the scheme was different. We need to map vault version to scheme.
+                // This part is tricky as CryptorProvider.Scheme might not directly map old versions.
+                // The original code had complex version detection.
+                // For simplicity, we'll assume if it's loaded here, it's pre-UVF.
+                // However, CryptorProvider.ForScheme expects a UVF-compatible scheme.
+                // This indicates a deeper architectural consideration for handling true legacy vaults vs UVF.
+                
+                // If the intention is to use the *new* UVF cryptors with an old key, that's an adaptation.
+                // If masterkeyFile.VaultVersion >= 8, it might be an early UVF draft attempt.
+                // For now, let's assume we want to use a UVF_DRAFT cryptor with the adapted key.
+                CryptorProvider.Scheme scheme = CryptorProvider.Scheme.UVF_DRAFT; // Or determine based on masterkeyFile.VaultVersion
+                if (masterkeyFile.VaultVersion < 8) {
+                    // This path would require a V1/V2 cryptor provider if they were distinct and available.
+                    // For now, we are focusing on UVF. This branch is problematic for true legacy.
+                     throw new UnsupportedVaultFormatException(new Uri("file://masterkey.cryptomator"), VaultFormat.Unknown, $"True legacy vault versions ({masterkeyFile.VaultVersion}) require a specific legacy CryptorProvider not used in this UVF-focused load path.");
                 }
-                else
-                {
-                    var dummyUri = new Uri("file://masterkey.cryptomator");
-                    var detectedFormat = VaultFormat.Unknown;
-                    string errorMessage = $"Unsupported vault version ({masterkeyFile.VaultVersion}) or unable to determine scheme.";
-                    throw new UnsupportedVaultFormatException(dummyUri, detectedFormat, errorMessage);
-                }
+
                 CryptorProvider provider = CryptorProvider.ForScheme(scheme);
-                Cryptor cryptor = provider.Provide(revolving, CsPrng);
-                return new Vault(cryptor, perpetualMasterkey, revolving);
+                using var csprng = RandomNumberGenerator.Create();
+                cryptor = provider.Provide(revolvingAdapter, csprng);
+                return new Vault(cryptor, perpetualMasterkey, revolvingAdapter);
             }
             catch (Exception)
             {
-                if (revolving != null && revolving is IDisposable disposableRev)
-                {
-                    disposableRev.Dispose();
-                }
+                (revolvingAdapter as IDisposable)?.Dispose();
+                (cryptor as IDisposable)?.Dispose();
                 perpetualMasterkey.Dispose();
                 throw;
             }
@@ -272,8 +348,11 @@ namespace UvfLib
         /// <exception cref="InvalidPassphraseException">If the oldPassword is incorrect.</exception>
         public static byte[] ChangeUvfVaultPassword(byte[] encryptedUvfFileContent, string oldPassword, string newPassword)
         {
-            // Delegate to VaultKeyHelper, pepper is not used for JWE in this simplified setup
-            return VaultKeyHelper.ChangeVaultPasswordInternal(encryptedUvfFileContent, oldPassword, newPassword, null);
+            // This reuses JweVaultManager which is correct.
+            string oldJwe = Encoding.UTF8.GetString(encryptedUvfFileContent);
+            UvfMasterkeyPayload payload = JweVaultManager.LoadVaultPayload(oldJwe, oldPassword); // Decrypt with old
+            string newJwe = JweVaultManager.CreateVault(payload, newPassword); // Re-encrypt with new
+            return Encoding.UTF8.GetBytes(newJwe);
         }
 
         // --- Instance Methods for Operations ---
@@ -288,12 +367,13 @@ namespace UvfLib
         /// <exception cref="CryptoException">If encryption fails.</exception>
         public string EncryptFilenameForRoot(string plaintextFilename)
         {
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
             if (plaintextFilename == null) throw new ArgumentNullException(nameof(plaintextFilename));
             var dirCryptor = _cryptor.DirectoryContentCryptor();
             if (dirCryptor == null) throw new InvalidOperationException("Directory cryptor not available.");
 
-            DirectoryMetadata rootMetadata = dirCryptor.RootDirectoryMetadata();
-            IDirectoryContentCryptor.Encrypting nameEncryptor = dirCryptor.FileNameEncryptor(rootMetadata);
+            DirectoryMetadata rootMetadata = dirCryptor.RootDirectoryMetadata(); // This now returns metadata with empty children list
+            Api.IDirectoryContentCryptor.Encrypting nameEncryptor = dirCryptor.FileNameEncryptor(rootMetadata);
             return nameEncryptor.Encrypt(plaintextFilename);
         }
 
@@ -309,12 +389,13 @@ namespace UvfLib
         /// <exception cref="CryptoException">If decryption fails.</exception>
         public string DecryptFilenameFromRoot(string encryptedFilename)
         {
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
             if (encryptedFilename == null) throw new ArgumentNullException(nameof(encryptedFilename));
             var dirCryptor = _cryptor.DirectoryContentCryptor();
             if (dirCryptor == null) throw new InvalidOperationException("Directory cryptor not available.");
 
             DirectoryMetadata rootMetadata = dirCryptor.RootDirectoryMetadata();
-            IDirectoryContentCryptor.Decrypting nameDecryptor = dirCryptor.FileNameDecryptor(rootMetadata);
+            Api.IDirectoryContentCryptor.Decrypting nameDecryptor = dirCryptor.FileNameDecryptor(rootMetadata);
             return nameDecryptor.Decrypt(encryptedFilename);
         }
 
@@ -325,6 +406,7 @@ namespace UvfLib
         /// <exception cref="InvalidOperationException">If the vault is not initialized correctly.</exception>
         public string GetRootDirectoryPath()
         {
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
             var dirCryptor = _cryptor.DirectoryContentCryptor();
             if (dirCryptor == null) throw new InvalidOperationException("Directory cryptor not available.");
 
@@ -339,6 +421,7 @@ namespace UvfLib
         /// <exception cref="InvalidOperationException">If the vault is not initialized correctly.</exception>
         public DirectoryMetadata GetRootDirectoryMetadata()
         {
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
             var dirCryptor = _cryptor.DirectoryContentCryptor();
             if (dirCryptor == null) throw new InvalidOperationException("Directory cryptor not available.");
             return dirCryptor.RootDirectoryMetadata();
@@ -356,7 +439,7 @@ namespace UvfLib
         /// <exception cref="InvalidOperationException">If the vault is not initialized correctly.</exception>
         public Stream GetEncryptingStream(Stream outputStream, bool leaveOpen = false)
         {
-            // Delegate to VaultStreamHelper
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
             return VaultStreamHelper.GetEncryptingStreamInternal(_cryptor, outputStream, leaveOpen);
         }
 
@@ -374,7 +457,7 @@ namespace UvfLib
         /// <exception cref="AuthenticationFailedException">If header or content authentication fails.</exception>
         public Stream GetDecryptingStream(Stream inputStream, bool leaveOpen = false)
         {
-            // Delegate to VaultStreamHelper
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
             return VaultStreamHelper.GetDecryptingStreamInternal(_cryptor, inputStream, leaveOpen);
         }
 
@@ -388,7 +471,10 @@ namespace UvfLib
         /// <exception cref="InvalidOperationException">If the vault is not initialized correctly.</exception>
         public DirectoryMetadata CreateNewDirectoryMetadata()
         {
-            return VaultDirectoryHelper.CreateNewDirectoryMetadataInternal(_cryptor);
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
+            var dirCryptor = _cryptor.DirectoryContentCryptor();
+            if (dirCryptor == null) throw new InvalidOperationException("Directory cryptor not available.");
+            return dirCryptor.NewDirectoryMetadata(); // This now returns metadata with empty children list
         }
 
         /// <summary>
@@ -402,21 +488,34 @@ namespace UvfLib
         /// <exception cref="CryptoException">If encryption fails.</exception>
         public byte[] EncryptDirectoryMetadata(DirectoryMetadata metadata)
         {
-            return VaultDirectoryHelper.EncryptDirectoryMetadataInternal(_cryptor, metadata);
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
+            var dirCryptor = _cryptor.DirectoryContentCryptor();
+            if (dirCryptor == null) throw new InvalidOperationException("Directory cryptor not available.");
+            // This will now use the V3.DirectoryContentCryptorImpl which serializes children to JSON
+            return dirCryptor.EncryptDirectoryMetadata(metadata);
         }
 
         /// <summary>
         /// Decrypts the content of a dir.uvf file.
         /// </summary>
-        /// <param name="encryptedMetadata">The encrypted binary content read from a dir.uvf file.</param>
-        /// <returns>The decrypted DirectoryMetadata instance.</returns>
-        /// <exception cref="ArgumentNullException">If encryptedMetadata is null.</exception>
+        /// <param name="encryptedMetadataBytes">The encrypted binary content read from a dir.uvf file.</param>
+        /// <param name="directorysOwnDirId">The Base64Url encoded DirId of the directory to which this metadata belongs.</param>
+        /// <returns>The decrypted DirectoryMetadata instance, including its children.</returns>
+        /// <exception cref="ArgumentNullException">If encryptedMetadataBytes or directorysOwnDirId is null.</exception>
         /// <exception cref="InvalidOperationException">If the vault is not initialized correctly.</exception>
-        /// <exception cref="InvalidCiphertextException">If the ciphertext is invalid/corrupt.</exception> // May also throw ArgumentException for size
+        /// <exception cref="InvalidCiphertextException">If the ciphertext is invalid/corrupt.</exception>
         /// <exception cref="AuthenticationFailedException">If metadata authentication fails.</exception>
-        public DirectoryMetadata DecryptDirectoryMetadata(byte[] encryptedMetadata)
+        public DirectoryMetadata DecryptDirectoryMetadata(byte[] encryptedMetadataBytes, string directorysOwnDirId)
         {
-            return VaultDirectoryHelper.DecryptDirectoryMetadataInternal(_cryptor, encryptedMetadata);
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
+            if (string.IsNullOrEmpty(directorysOwnDirId)) throw new ArgumentNullException(nameof(directorysOwnDirId));
+
+            var dirCryptor = _cryptor.DirectoryContentCryptor();
+            if (dirCryptor == null) throw new InvalidOperationException("Directory cryptor not available.");
+            
+            byte[] dirIdBytes = Base64Url.Decode(directorysOwnDirId);
+            // This will now use the V3.DirectoryContentCryptorImpl which expects dirIdBytes and deserializes children from JSON
+            return dirCryptor.DecryptDirectoryMetadata(encryptedMetadataBytes, dirIdBytes);
         }
 
         // --- Contextual Filename/Path Operations ---
@@ -432,6 +531,7 @@ namespace UvfLib
         /// <exception cref="CryptoException">If encryption fails.</exception>
         public string EncryptFilename(string plaintextFilename, DirectoryMetadata directoryMetadata)
         {
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
             return VaultDirectoryHelper.EncryptFilenameInternal(_cryptor, directoryMetadata, plaintextFilename);
         }
 
@@ -448,6 +548,7 @@ namespace UvfLib
         /// <exception cref="CryptoException">If decryption fails.</exception>
         public string DecryptFilename(string encryptedFilename, DirectoryMetadata directoryMetadata)
         {
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
             return VaultDirectoryHelper.DecryptFilenameInternal(_cryptor, directoryMetadata, encryptedFilename);
         }
 
@@ -460,10 +561,70 @@ namespace UvfLib
         /// <exception cref="InvalidOperationException">If the vault is not initialized correctly.</exception>
         public string GetDirectoryPath(DirectoryMetadata directoryMetadata)
         {
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
             return VaultDirectoryHelper.GetDirectoryPathInternal(_cryptor, directoryMetadata);
         }
 
-        // TODO: Decide if exposing other lower-level operations is useful (e.g., direct chunk access)
+        /// <summary>
+        /// Gets the physical vault path for a directory based on its DirId string (Base64Url encoded).
+        /// Useful for finding a child directory's physical path when its DirId is known from parent metadata.
+        /// </summary>
+        /// <param name="dirIdBase64Url">The Base64Url encoded DirId of the directory.</param>
+        /// <param name="seedId">The seed ID associated with this directory (e.g., from parent or vault default).</param>
+        /// <returns>The relative physical path (e.g., "d/XX/YYYY...").</returns>
+        public string GetDirectoryPathByDirIdString(string dirIdBase64Url, int seedId)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(Vault));
+            if (string.IsNullOrEmpty(dirIdBase64Url)) throw new ArgumentNullException(nameof(dirIdBase64Url));
+
+            var dirCryptor = _cryptor.DirectoryContentCryptor();
+            if (dirCryptor == null) throw new InvalidOperationException("Directory cryptor not available.");
+
+            byte[] dirIdBytes = Base64Url.Decode(dirIdBase64Url);
+            // Create a temporary DirectoryMetadata instance to pass to the existing DirPath method.
+            // The children list can be empty as it's not used by DirPath itself.
+            var tempMetadata = new V3.DirectoryMetadataImpl(seedId, dirIdBytes, null); 
+            return dirCryptor.DirPath(tempMetadata);
+        }
+
+        /// <summary>
+        /// Gets the vault-specific physical path for a directory based on its Base64Url encoded DirId.
+        /// Example: "d/AB/CDEFG..."
+        /// </summary>
+        /// <param name="dirIdBase64Url">The Base64Url encoded DirId of the directory.</param>
+        /// <returns>The relative physical path within the vault.</returns>
+        /// <exception cref="ArgumentNullException">If dirIdBase64Url is null.</exception>
+        /// <exception cref="ArgumentException">If dirIdBase64Url is empty or invalid Base64Url, or if the DirId length is incorrect after decoding.</exception>
+        public string GetDirectoryPathByDirId(string dirIdBase64Url)
+        {
+            if (string.IsNullOrEmpty(dirIdBase64Url))
+            {
+                throw new ArgumentException("DirId (Base64Url) cannot be null or empty.", nameof(dirIdBase64Url));
+            }
+
+            byte[] dirIdBytes;
+            try
+            {
+                dirIdBytes = Base64Url.Decode(dirIdBase64Url);
+            }
+            catch (FormatException ex)
+            {
+                throw new ArgumentException("Invalid Base64Url format for DirId.", nameof(dirIdBase64Url), ex);
+            }
+
+            if (dirIdBytes.Length != UvfLib.V3.Constants.DIR_ID_SIZE)
+            {
+                throw new ArgumentException($"Decoded DirId must be {UvfLib.V3.Constants.DIR_ID_SIZE} bytes long.", nameof(dirIdBase64Url));
+            }
+
+            FileNameCryptor fileNameCryptor = _cryptor.FileNameCryptor(_revolvingMasterkey.GetCurrentRevision());
+            if (!(fileNameCryptor is FileNameCryptorImpl fileNameCryptorImpl))
+            {
+                throw new InvalidOperationException("Unable to get FileNameCryptorImpl instance for hashing DirId.");
+            }
+            string hashedDirId = fileNameCryptorImpl.HashDirectoryId(dirIdBytes);
+            return UvfLib.V3.Constants.VAULT_DIR_PREFIX + hashedDirId.Substring(0, 2) + "/" + hashedDirId.Substring(2);
+        }
 
         /// <summary>
         /// Provides access to the underlying Cryptor instance.
@@ -479,6 +640,40 @@ namespace UvfLib
                 if (_cryptor == null) throw new InvalidOperationException("Cryptor not initialized.");
                 return _cryptor;
             }
+        }
+
+        /// <summary>
+        /// Adds a child item to the given parent directory's metadata.
+        /// Note: This modifies the DirectoryMetadata object in memory.
+        /// You must subsequently call EncryptDirectoryMetadata and save the result to persist this change.
+        /// </summary>
+        /// <param name="parentMetadata">The metadata of the parent directory to modify.</param>
+        /// <param name="child">The VaultChildItem to add.</param>
+        /// <exception cref="ArgumentNullException">If parentMetadata or child is null.</exception>
+        /// <exception cref="ArgumentException">If parentMetadata is not of the expected underlying type (DirectoryMetadataImpl).</exception>
+        public void AddChildToDirectoryMetadata(DirectoryMetadata parentMetadata, VaultChildItem child)
+        {
+            if (parentMetadata == null) throw new ArgumentNullException(nameof(parentMetadata));
+            if (child == null) throw new ArgumentNullException(nameof(child));
+
+            DirectoryMetadataImpl impl = DirectoryMetadataImpl.Cast(parentMetadata);
+            impl.AddChild(child);
+        }
+
+        /// <summary>
+        /// Clears all child items from the given directory's metadata.
+        /// Note: This modifies the DirectoryMetadata object in memory.
+        /// You must subsequently call EncryptDirectoryMetadata and save the result to persist this change.
+        /// </summary>
+        /// <param name="metadata">The metadata of the directory whose children should be cleared.</param>
+        /// <exception cref="ArgumentNullException">If metadata is null.</exception>
+        /// <exception cref="ArgumentException">If metadata is not of the expected underlying type (DirectoryMetadataImpl).</exception>
+        public void ClearChildrenInDirectoryMetadata(DirectoryMetadata metadata)
+        {
+            if (metadata == null) throw new ArgumentNullException(nameof(metadata));
+
+            DirectoryMetadataImpl impl = DirectoryMetadataImpl.Cast(metadata);
+            impl.ClearChildren();
         }
 
     }
