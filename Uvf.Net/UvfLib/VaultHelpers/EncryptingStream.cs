@@ -88,7 +88,12 @@ namespace UvfLib.VaultHelpers
         private void EncryptAndWriteChunk(ReadOnlyMemory<byte> cleartextChunk)
         {
             _cryptor.FileContentCryptor().EncryptChunk(cleartextChunk, _ciphertextChunkBuffer, 0, _fileHeader);
-            _outputStream.Write(_ciphertextChunkBuffer.Span);
+            
+            // Calculate the actual length of the encrypted data for this chunk
+            int actualEncryptedLength = V3.Constants.GCM_NONCE_SIZE + cleartextChunk.Length + V3.Constants.GCM_TAG_SIZE;
+            
+            // Write only the valid portion of the ciphertext buffer
+            _outputStream.Write(_ciphertextChunkBuffer.Slice(0, actualEncryptedLength).Span);
         }
 
         public override void Flush()

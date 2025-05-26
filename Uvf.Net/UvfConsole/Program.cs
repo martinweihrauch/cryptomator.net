@@ -1,13 +1,14 @@
 ﻿using UvfLib; // Assuming Vault class is in this namespace
 using UvfLib.Api; // For DirectoryMetadata and exceptions
+using System.Diagnostics; // For Stopwatch
 
 Console.WriteLine("UvfLib Simple Encryption Example");
 
 // --- Configuration --- 
 // IMPORTANT: Replace with your actual paths!
-const string sourceFolderPath = @"D:\temp\EncryptionTestSource"; // Folder containing files/dirs to encrypt
-const string vaultFolderPath = @"D:\temp\EncryptionTestVault";   // Target folder where encrypted vault structure will be created
-const string decryptedFolderPath = @"D:\temp\EncryptionTestDecrypted"; // Target folder for decrypted content
+const string sourceFolderPath = @"D:\\temp\\uvf\\EncryptionTestSource"; // Folder containing files/dirs to encrypt
+const string vaultFolderPath = @"D:\\temp\\uvf\\EncryptionTestVault";   // Target folder where encrypted vault structure will be created
+const string decryptedFolderPath = @"D:\\temp\\uvf\\EncryptionTestDecrypted"; // Target folder for decrypted content
 const string password = "your-super-secret-password";
 // ---------------------
 
@@ -64,6 +65,9 @@ try
         {
             // --- Recursive Encryption ---
             Console.WriteLine($"Starting encryption from '{sourceFolderPath}' to '{vaultFolderPath}'...");
+            
+            Stopwatch encryptionStopwatch = Stopwatch.StartNew();
+            long totalBytesProcessed = 0;
 
             // Get root metadata and the physical path for the encrypted root content
             DirectoryMetadata rootMetadata = vault.GetRootDirectoryMetadata();
@@ -72,13 +76,17 @@ try
             Directory.CreateDirectory(fullVaultRootContentPath); // Ensure physical root content dir exists
 
             // Start recursive processing
-            ProcessDirectory(vault, sourceFolderPath, fullVaultRootContentPath, rootMetadata);
+            totalBytesProcessed = ProcessDirectory(vault, sourceFolderPath, fullVaultRootContentPath, rootMetadata);
 
+            encryptionStopwatch.Stop();
             Console.WriteLine("Encryption process completed.");
+            PrintSpeed("Encrypted", totalBytesProcessed, encryptionStopwatch.Elapsed);
         }
         else // decrypt
         {
             Console.WriteLine($"Starting decryption from '{vaultFolderPath}' to '{decryptedFolderPath}'...");
+            Stopwatch decryptionStopwatch = Stopwatch.StartNew();
+            long totalBytesProcessed = 0;
             
             // Get root metadata and start decryption from the root
             DirectoryMetadata rootMetadata = vault.GetRootDirectoryMetadata();
@@ -86,9 +94,11 @@ try
             string fullVaultRootContentPath = Path.Combine(vaultFolderPath, vaultRootContentPath);
             
             // Start recursive decryption
-            DecryptDirectory(vault, fullVaultRootContentPath, decryptedFolderPath, rootMetadata);
+            totalBytesProcessed = DecryptDirectory(vault, fullVaultRootContentPath, decryptedFolderPath, rootMetadata);
             
+            decryptionStopwatch.Stop();
             Console.WriteLine("Decryption process completed.");
+            PrintSpeed("Decrypted", totalBytesProcessed, decryptionStopwatch.Elapsed);
         }
     }
 }
@@ -122,17 +132,20 @@ catch (Exception ex)
 /// <param name="sourceDir">The current source directory path.</param>
 /// <param name="targetEncryptedPath">The physical path within the vault where the encrypted contents of sourceDir should be placed.</param>
 /// <param name="parentDirMetadata">The DirectoryMetadata of the PARENT directory in the vault structure (used for encrypting names).</param>
-static void ProcessDirectory(Vault vault, string sourceDir, string targetEncryptedPath, DirectoryMetadata parentDirMetadata)
+/// <returns>Total bytes of source files processed.</returns>
+static long ProcessDirectory(Vault vault, string sourceDir, string targetEncryptedPath, DirectoryMetadata parentDirMetadata)
 {
     Console.WriteLine($"Processing directory: {sourceDir}");
+    long currentDirBytesProcessed = 0;
 
     // --- Encrypt Files in Current Directory ---
     foreach (string sourceFile in Directory.GetFiles(sourceDir))
     {
         string plainName = Path.GetFileName(sourceFile);
-        
+        long sourceFileSize = 0;
         try
         {
+            sourceFileSize = new FileInfo(sourceFile).Length;
             // Encrypt filename using parent directory's metadata
             string encryptedFilename = vault.EncryptFilename(plainName, parentDirMetadata);
             string targetFilePath = Path.Combine(targetEncryptedPath, encryptedFilename);
@@ -140,9 +153,6 @@ static void ProcessDirectory(Vault vault, string sourceDir, string targetEncrypt
             // Check if file already exists
             if (File.Exists(targetFilePath))
             {
-                // Get the source file size
-                long sourceFileSize = new FileInfo(sourceFile).Length;
-                
                 // Get the target file size
                 long targetFileSize = new FileInfo(targetFilePath).Length;
                 
@@ -153,6 +163,7 @@ static void ProcessDirectory(Vault vault, string sourceDir, string targetEncrypt
                 if (targetFileSize == expectedEncryptedSize)
                 {
                     Console.WriteLine($"  Skipping file (already exists with matching size): {plainName}");
+                    currentDirBytesProcessed += sourceFileSize; // Count skipped files as processed for throughput
                     continue;
                 }
                 else
@@ -170,12 +181,14 @@ static void ProcessDirectory(Vault vault, string sourceDir, string targetEncrypt
             using FileStream targetStream = File.Create(targetFilePath);
             using Stream encryptingStream = vault.GetEncryptingStream(targetStream);
 
-            sourceStream.CopyTo(encryptingStream); // This handles buffering and encryption
+            sourceStream.CopyTo(encryptingStream); 
+            currentDirBytesProcessed += sourceFileSize; // Add after successful processing or decision to process
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"    ERROR encrypting file {plainName}: {ex.Message}");
-            // Decide whether to continue or stop on file error
+            // Optionally, still add sourceFileSize if you want to count attempted bytes:
+            // currentDirBytesProcessed += sourceFileSize; 
         }
     }
 
@@ -213,20 +226,18 @@ static void ProcessDirectory(Vault vault, string sourceDir, string targetEncrypt
             {
                 Console.WriteLine($"    Reusing existing directory structure at: {fullTargetSubDirPath}");
                 byte[] encryptedMetadataBytes = File.ReadAllBytes(dirUvfPath);
-                // Line 216: subDirMetadata is UvfLib.Api.DirectoryMetadata. DirId is a public member of the interface.
-                // The explicit cast ((UvfLib.Api.DirectoryMetadata)subDirMetadata) we tried before is also okay.
                 subDirMetadata = vault.DecryptDirectoryMetadata(encryptedMetadataBytes, subDirMetadata.DirId); 
             }
 
             // 6. Recursively process the subdirectory
-            ProcessDirectory(vault, sourceSubDir, fullTargetSubDirPath, subDirMetadata);
+            currentDirBytesProcessed += ProcessDirectory(vault, sourceSubDir, fullTargetSubDirPath, subDirMetadata);
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"    ERROR processing subdirectory {plainSubDirName}: {ex.Message}");
-            // Decide whether to continue or stop on directory error
         }
     }
+    return currentDirBytesProcessed;
 }
 
 /// <summary>
@@ -236,9 +247,11 @@ static void ProcessDirectory(Vault vault, string sourceDir, string targetEncrypt
 /// <param name="encryptedDirPath">The encrypted directory path to decrypt.</param>
 /// <param name="targetDecryptedPath">The target path for decrypted content.</param>
 /// <param name="directoryMetadata">The DirectoryMetadata for the current directory.</param>
-static void DecryptDirectory(Vault vault, string encryptedDirPath, string targetDecryptedPath, DirectoryMetadata directoryMetadata)
+/// <returns>Total bytes of decrypted files.</returns>
+static long DecryptDirectory(Vault vault, string encryptedDirPath, string targetDecryptedPath, DirectoryMetadata directoryMetadata)
 {
     Console.WriteLine($"Decrypting directory: {encryptedDirPath}");
+    long currentDirBytesDecrypted = 0;
     
     // Ensure target directory exists
     Directory.CreateDirectory(targetDecryptedPath);
@@ -249,25 +262,23 @@ static void DecryptDirectory(Vault vault, string encryptedDirPath, string target
     {
         string encryptedFileName = Path.GetFileName(encryptedFile);
         
-        // Skip the directory metadata file
         if (encryptedFileName == "dir.uvf") 
             continue;
         
         try
         {
-            // Decrypt the filename
             string decryptedFileName = vault.DecryptFilename(encryptedFileName, directoryMetadata);
             string targetFilePath = Path.Combine(targetDecryptedPath, decryptedFileName);
             
             Console.WriteLine($"  Decrypting file: {encryptedFileName} -> {decryptedFileName}");
             
-            // Decrypt the file content
             using (FileStream encryptedStream = File.OpenRead(encryptedFile))
             using (FileStream decryptedStream = File.Create(targetFilePath))
             using (Stream decryptingStream = vault.GetDecryptingStream(encryptedStream))
             {
                 decryptingStream.CopyTo(decryptedStream);
             }
+            currentDirBytesDecrypted += new FileInfo(targetFilePath).Length; // Add size of successfully decrypted file
         }
         catch (Exception ex)
         {
@@ -275,13 +286,10 @@ static void DecryptDirectory(Vault vault, string encryptedDirPath, string target
         }
     }
     
-    // Find and process subdirectories
-    // In the vault format, directories are stored as special paths with dir.uvf files
     foreach (string potentialSubDir in Directory.GetDirectories(encryptedDirPath))
     {
         try
         {
-            // Check if this is a proper UVF directory with metadata
             string dirUvfPath = Path.Combine(potentialSubDir, "dir.uvf");
             if (!File.Exists(dirUvfPath))
             {
@@ -289,21 +297,37 @@ static void DecryptDirectory(Vault vault, string encryptedDirPath, string target
                 continue;
             }
             
-            // Read and decrypt the directory metadata
             byte[] encryptedMetadataBytes = File.ReadAllBytes(dirUvfPath);
-            DirectoryMetadata subDirMetadata = vault.DecryptDirectoryMetadata(encryptedMetadataBytes, "TODO_NEEDS_ACTUAL_DIR_ID_FOR_THIS_PATH"); // Placeholder to compile
+            DirectoryMetadata subDirMetadata = vault.DecryptDirectoryMetadata(encryptedMetadataBytes, "TODO_NEEDS_ACTUAL_DIR_ID_FOR_THIS_PATH"); 
             
-            // Create a folder name for this subdirectory
-            // We'll use its position number, since we don't store plaintext directory names
             string subDirName = $"Folder_{Path.GetFileName(potentialSubDir)}";
             string targetSubDirPath = Path.Combine(targetDecryptedPath, subDirName);
             
-            // Recursively decrypt this subdirectory
-            DecryptDirectory(vault, potentialSubDir, targetSubDirPath, subDirMetadata);
+            currentDirBytesDecrypted += DecryptDirectory(vault, potentialSubDir, targetSubDirPath, subDirMetadata);
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"    ERROR processing subdirectory {potentialSubDir}: {ex.Message}");
         }
+    }
+    return currentDirBytesDecrypted;
+}
+
+static void PrintSpeed(string operationLabel, long totalBytes, TimeSpan elapsed)
+{
+    Console.WriteLine($"{operationLabel} {totalBytes} bytes.");
+    if (elapsed.TotalSeconds > 0 && totalBytes > 0)
+    {
+        double megabytes = totalBytes / (1024.0 * 1024.0);
+        double speed = megabytes / elapsed.TotalSeconds;
+        Console.WriteLine($"Speed: {speed:F2} MB/s ({elapsed.TotalMilliseconds:F0} ms)");
+    }
+    else if (totalBytes == 0)
+    {
+        Console.WriteLine("No data processed to calculate speed.");
+    }
+    else
+    {
+         Console.WriteLine($"Time elapsed: {elapsed.TotalMilliseconds:F0} ms (too fast to calculate meaningful speed for small data or speed calculation not applicable).");
     }
 }
