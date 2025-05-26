@@ -29,7 +29,7 @@ if (operation == "decrypt")
     Directory.CreateDirectory(decryptedFolderPath);
 }
 
-string masterkeyFilePath = Path.Combine(vaultFolderPath, "masterkey.cryptomator");
+string masterkeyFilePath = Path.Combine(vaultFolderPath, "vault.uvf");
 
 try
 {
@@ -56,7 +56,7 @@ try
 
     Console.WriteLine("Loading vault...");
     // Load the vault using the key file content and password
-    using (Vault vault = Vault.LoadCryptomatorVault(masterkeyContent, password))
+    using (Vault vault = Vault.LoadUvfVault(masterkeyContent, password))
     {
         Console.WriteLine("Vault loaded successfully.");
 

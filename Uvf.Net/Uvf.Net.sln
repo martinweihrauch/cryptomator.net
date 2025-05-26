@@ -1,4 +1,5 @@
-﻿Microsoft Visual Studio Solution File, Format Version 12.00
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.12.35707.178
 MinimumVisualStudioVersion = 10.0.40219.1
@@ -9,6 +10,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UvfLib.Tests", "UvfLib.Tests\UvfLib.Tests.csproj", "{545A3638-ACE2-494C-ABE7-FC47BED0005B}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Benchmarks", "Benchmarks\Benchmarks.csproj", "{A8AB3DE8-0F59-4DBF-84E8-CCDBDEF3C92D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesperationProject", "DesperationProject\DesperationProject.csproj", "{30C56130-6514-46D2-B4BD-7D56F4E7B90F}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -41,8 +44,17 @@ Global
 		{A8AB3DE8-0F59-4DBF-84E8-CCDBDEF3C92D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A8AB3DE8-0F59-4DBF-84E8-CCDBDEF3C92D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A8AB3DE8-0F59-4DBF-84E8-CCDBDEF3C92D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{30C56130-6514-46D2-B4BD-7D56F4E7B90F}.Benchmark|Any CPU.ActiveCfg = Debug|Any CPU
+		{30C56130-6514-46D2-B4BD-7D56F4E7B90F}.Benchmark|Any CPU.Build.0 = Debug|Any CPU
+		{30C56130-6514-46D2-B4BD-7D56F4E7B90F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{30C56130-6514-46D2-B4BD-7D56F4E7B90F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{30C56130-6514-46D2-B4BD-7D56F4E7B90F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{30C56130-6514-46D2-B4BD-7D56F4E7B90F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {02DFE594-86A3-4EA5-8D0B-4D704E62CBAC}
 	EndGlobalSection
 EndGlobal

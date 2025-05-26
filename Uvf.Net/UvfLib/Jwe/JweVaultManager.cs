@@ -15,7 +15,7 @@ namespace UvfLib.Jwe
     {
         private const JweAlgorithm KeyManagementAlgorithm = JweAlgorithm.PBES2_HS512_A256KW;
         private const JweEncryption ContentEncryptionAlgorithm = JweEncryption.A256GCM;
-        private const int DefaultPbkdf2Iterations = 262144; // A reasonable default, higher is better.
+        private const int DefaultPbkdf2Iterations = 64000; // A reasonable default, higher is better.
         private const int Pbkdf2SaltSizeBytes = 16; // 128 bits for salt
 
         /// <summary>
@@ -37,14 +37,32 @@ namespace UvfLib.Jwe
             // However, to be explicit and align with the provided test vault, we can specify p2s and p2c.
             byte[] salt = RandomNumberGenerator.GetBytes(Pbkdf2SaltSizeBytes);
 
+#if DEBUG
+            Console.WriteLine(); // Blank line for readability
+            Console.WriteLine("---------------- JWE CreateVault DEBUG START ----------------");
+            Console.WriteLine($"[DEBUG] CreateVault - Password Length: {password.Length}");
+            using (var sha256 = SHA256.Create())
+            {
+                var hashedBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
+                Console.WriteLine($"[DEBUG] CreateVault - Password SHA256: {Convert.ToBase64String(hashedBytes)}");
+            }
+            Console.WriteLine($"[DEBUG] CreateVault - PBKDF2 Iterations (p2c input): {pbkdf2Iterations}");
+            Console.WriteLine($"[DEBUG] CreateVault - Generated Salt (p2s input): {Base64Url.Encode(salt)}");
+            Console.WriteLine($"[DEBUG] CreateVault - KeyManagementAlgorithm: {KeyManagementAlgorithm}");
+            Console.WriteLine($"[DEBUG] CreateVault - ContentEncryptionAlgorithm: {ContentEncryptionAlgorithm}");
+            Console.WriteLine("---------------- JWE CreateVault DEBUG END   ----------------");
+            Console.WriteLine(); // Blank line for readability
+#endif
+
             var extraHeaders = new Dictionary<string, object>
             {
                 { "p2s", Base64Url.Encode(salt) },
                 { "p2c", pbkdf2Iterations },
                 { "uvf.spec.version", payload.UvfSpecVersion } // Include in protected header
             };
-
-            return JWT.Encode(payloadJson, password, KeyManagementAlgorithm, ContentEncryptionAlgorithm, extraHeaders: extraHeaders);
+            
+            var settings = new JwtSettings(); // Create default settings
+            return JWT.Encode(payloadJson, password, KeyManagementAlgorithm, ContentEncryptionAlgorithm, extraHeaders: extraHeaders, settings: settings);
         }
 
         /// <summary>
@@ -61,19 +79,53 @@ namespace UvfLib.Jwe
             if (string.IsNullOrEmpty(jweString)) throw new ArgumentNullException(nameof(jweString));
             if (string.IsNullOrEmpty(password)) throw new ArgumentNullException(nameof(password));
 
-            string decryptedJsonPayload = JWT.Decode(jweString, password);
+#if DEBUG
+            Console.WriteLine(); // Blank line for readability
+            Console.WriteLine("---------------- JWE LoadVaultPayload DEBUG START ----------------");
+            Console.WriteLine($"[DEBUG] LoadVaultPayload - Password Length: {password.Length}");
+            using (var sha256 = SHA256.Create())
+            {
+                var hashedBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
+                Console.WriteLine($"[DEBUG] LoadVaultPayload - Password SHA256: {Convert.ToBase64String(hashedBytes)}");
+            }
+            try
+            {
+                var parts = jweString.Split('.');
+                if (parts.Length >= 1)
+                {
+                    var decodedHeader = Encoding.UTF8.GetString(Base64Url.Decode(parts[0]));
+                    Console.WriteLine($"[DEBUG] LoadVaultPayload - JWE Protected Header (Raw Decoded): {decodedHeader}");
+                } else {
+                    Console.WriteLine("[DEBUG] LoadVaultPayload - JWE string does not contain a header part.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DEBUG] LoadVaultPayload - Error decoding JWE header for debug: {ex.Message}");
+            }
+            Console.WriteLine($"[DEBUG] LoadVaultPayload - Expected KeyManagementAlgorithm from const: {KeyManagementAlgorithm}");
+            Console.WriteLine($"[DEBUG] LoadVaultPayload - Expected ContentEncryptionAlgorithm from const: {ContentEncryptionAlgorithm}");
+            Console.WriteLine("---------------- JWE LoadVaultPayload DEBUG END   ----------------");
+            Console.WriteLine(); // Blank line for readability
+#endif
+
+            var settings = new JwtSettings(); // Create default settings
+            string decryptedJsonPayload = JWT.Decode(jweString, password, settings: settings); 
 
             if (string.IsNullOrEmpty(decryptedJsonPayload))
             {
                 throw new InvalidOperationException("Decrypted JWE payload was null or empty.");
             }
 
-            var payload = JsonSerializer.Deserialize<UvfMasterkeyPayload>(decryptedJsonPayload);
-            if (payload == null)
+            // Use JsonSerializerOptions consistent with potential payload serialization if needed,
+            // though for UvfMasterkeyPayload, default or PropertyNameCaseInsensitive is usually fine.
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var deserializedPayload = JsonSerializer.Deserialize<UvfMasterkeyPayload>(decryptedJsonPayload, options);
+            if (deserializedPayload == null)
             {
                 throw new InvalidOperationException("Failed to deserialize the JWE payload into UvfMasterkeyPayload.");
             }
-            return payload;
+            return deserializedPayload;
         }
     }
 } 
