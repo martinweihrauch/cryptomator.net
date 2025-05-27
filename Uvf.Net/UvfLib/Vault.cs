@@ -496,26 +496,29 @@ namespace UvfLib
         }
 
         /// <summary>
-        /// Decrypts the content of a dir.uvf file.
+        /// Decrypts directory metadata (dir.uvf content).
         /// </summary>
-        /// <param name="encryptedMetadataBytes">The encrypted binary content read from a dir.uvf file.</param>
-        /// <param name="directorysOwnDirId">The Base64Url encoded DirId of the directory to which this metadata belongs.</param>
-        /// <returns>The decrypted DirectoryMetadata instance, including its children.</returns>
-        /// <exception cref="ArgumentNullException">If encryptedMetadataBytes or directorysOwnDirId is null.</exception>
-        /// <exception cref="InvalidOperationException">If the vault is not initialized correctly.</exception>
-        /// <exception cref="InvalidCiphertextException">If the ciphertext is invalid/corrupt.</exception>
-        /// <exception cref="AuthenticationFailedException">If metadata authentication fails.</exception>
-        public DirectoryMetadata DecryptDirectoryMetadata(byte[] encryptedMetadataBytes, string directorysOwnDirId)
+        /// <param name="encryptedMetadataBytes">The encrypted metadata bytes (full content of dir.uvf).</param>
+        /// <returns>The decrypted directory metadata.</returns>
+        /// <exception cref="AuthenticationFailedException">If decryption fails due to authentication issues.</exception>
+        public DirectoryMetadata DecryptDirectoryMetadata(byte[] encryptedMetadataBytes)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(Vault));
-            if (string.IsNullOrEmpty(directorysOwnDirId)) throw new ArgumentNullException(nameof(directorysOwnDirId));
-
             var dirCryptor = _cryptor.DirectoryContentCryptor();
-            if (dirCryptor == null) throw new InvalidOperationException("Directory cryptor not available.");
-            
-            byte[] dirIdBytes = Base64Url.Decode(directorysOwnDirId);
-            // This will now use the V3.DirectoryContentCryptorImpl which expects dirIdBytes and deserializes children from JSON
-            return dirCryptor.DecryptDirectoryMetadata(encryptedMetadataBytes, dirIdBytes);
+            return ((Api.DirectoryContentCryptor)dirCryptor).DecryptDirectoryMetadata(encryptedMetadataBytes);
+        }
+
+        /// <summary>
+        /// Decrypts directory metadata (dir.uvf content).
+        /// </summary>
+        /// <param name="encryptedMetadataBytes">The encrypted metadata bytes (full content of dir.uvf).</param>
+        /// <param name="directorysOwnDirId">The Base64Url encoded DirId of the directory. (Not used in v3)</param>
+        /// <returns>The decrypted directory metadata.</returns>
+        /// <exception cref="AuthenticationFailedException">If decryption fails due to authentication issues.</exception>
+        [Obsolete("Use DecryptDirectoryMetadata(byte[] encryptedMetadataBytes) instead. The dirId parameter is not used in v3.")]
+        public DirectoryMetadata DecryptDirectoryMetadata(byte[] encryptedMetadataBytes, string directorysOwnDirId)
+        {
+            throw new NotSupportedException("Use DecryptDirectoryMetadata(byte[] encryptedMetadataBytes) instead. The dirId parameter is not used in v3.");
         }
 
         // --- Contextual Filename/Path Operations ---
@@ -583,7 +586,7 @@ namespace UvfLib
             byte[] dirIdBytes = Base64Url.Decode(dirIdBase64Url);
             // Create a temporary DirectoryMetadata instance to pass to the existing DirPath method.
             // The children list can be empty as it's not used by DirPath itself.
-            var tempMetadata = new V3.DirectoryMetadataImpl(seedId, dirIdBytes, null); 
+            var tempMetadata = new V3.DirectoryMetadataImpl(seedId, dirIdBytes); 
             return dirCryptor.DirPath(tempMetadata);
         }
 
@@ -642,38 +645,11 @@ namespace UvfLib
             }
         }
 
-        /// <summary>
-        /// Adds a child item to the given parent directory's metadata.
-        /// Note: This modifies the DirectoryMetadata object in memory.
-        /// You must subsequently call EncryptDirectoryMetadata and save the result to persist this change.
-        /// </summary>
-        /// <param name="parentMetadata">The metadata of the parent directory to modify.</param>
-        /// <param name="child">The VaultChildItem to add.</param>
-        /// <exception cref="ArgumentNullException">If parentMetadata or child is null.</exception>
-        /// <exception cref="ArgumentException">If parentMetadata is not of the expected underlying type (DirectoryMetadataImpl).</exception>
-        public void AddChildToDirectoryMetadata(DirectoryMetadata parentMetadata, VaultChildItem child)
+        // These explicit interface methods are now less relevant if using the contextual encryptor/decryptor above.
+        // They could be removed or marked obsolete if the contextual approach is preferred.
+        public string EncryptFilename(string cleartextName, string directoryId)
         {
-            if (parentMetadata == null) throw new ArgumentNullException(nameof(parentMetadata));
-            if (child == null) throw new ArgumentNullException(nameof(child));
-
-            DirectoryMetadataImpl impl = DirectoryMetadataImpl.Cast(parentMetadata);
-            impl.AddChild(child);
-        }
-
-        /// <summary>
-        /// Clears all child items from the given directory's metadata.
-        /// Note: This modifies the DirectoryMetadata object in memory.
-        /// You must subsequently call EncryptDirectoryMetadata and save the result to persist this change.
-        /// </summary>
-        /// <param name="metadata">The metadata of the directory whose children should be cleared.</param>
-        /// <exception cref="ArgumentNullException">If metadata is null.</exception>
-        /// <exception cref="ArgumentException">If metadata is not of the expected underlying type (DirectoryMetadataImpl).</exception>
-        public void ClearChildrenInDirectoryMetadata(DirectoryMetadata metadata)
-        {
-            if (metadata == null) throw new ArgumentNullException(nameof(metadata));
-
-            DirectoryMetadataImpl impl = DirectoryMetadataImpl.Cast(metadata);
-            impl.ClearChildren();
+            throw new NotSupportedException("Use contextual FileNameEncryptor obtained via DirectoryMetadata.");
         }
 
     }

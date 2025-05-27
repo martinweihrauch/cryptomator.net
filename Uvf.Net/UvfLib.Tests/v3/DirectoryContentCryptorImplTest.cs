@@ -60,7 +60,7 @@ namespace UvfLib.Tests.V3
             DirectoryMetadataImpl origMetadata = (DirectoryMetadataImpl)dirCryptor.NewDirectoryMetadata();
 
             byte[] encryptedMetadata = dirCryptor.EncryptDirectoryMetadata(origMetadata);
-            DirectoryMetadataImpl decryptedMetadata = (DirectoryMetadataImpl)dirCryptor.DecryptDirectoryMetadata(encryptedMetadata, origMetadata.GetDirIdBytes());
+            DirectoryMetadataImpl decryptedMetadata = (DirectoryMetadataImpl)dirCryptor.DecryptDirectoryMetadata(encryptedMetadata);
 
             Assert.AreEqual(origMetadata.SeedId, decryptedMetadata.SeedId);
             Assert.AreEqual(origMetadata.DirId, decryptedMetadata.DirId);
@@ -130,8 +130,8 @@ namespace UvfLib.Tests.V3
                     throw new InvalidOperationException("Outer class dirCryptor is STILL null in nested Setup after re-init attempt");
                 }
 
-                // Create an empty directory ID as in Java test, provide null for children
-                dirUvf = new DirectoryMetadataImpl(DirectoryContentCryptorImplTest.masterkey.GetCurrentRevision(), new byte[32], null);
+                // Create an empty directory ID as in Java test
+                dirUvf = new DirectoryMetadataImpl(DirectoryContentCryptorImplTest.masterkey.GetCurrentRevision(), new byte[32]);
                 enc = DirectoryContentCryptorImplTest.dirCryptor.FileNameEncryptor(dirUvf);
                 dec = DirectoryContentCryptorImplTest.dirCryptor.FileNameDecryptor(dirUvf);
             }
@@ -187,7 +187,7 @@ namespace UvfLib.Tests.V3
             {
                 DirectoryMetadataImpl differentRevision = new DirectoryMetadataImpl(
                     DirectoryContentCryptorImplTest.masterkey.GetFirstRevision(),
-                    new byte[32], null); // Provide null for children
+                    new byte[32]); // Removed null for children
 
                 IDirectoryContentCryptor.Decrypting differentRevisionDec =
                     DirectoryContentCryptorImplTest.dirCryptor.FileNameDecryptor(differentRevision);
@@ -208,7 +208,7 @@ namespace UvfLib.Tests.V3
 
                 DirectoryMetadataImpl differentDirIdMetadata = new DirectoryMetadataImpl(
                     DirectoryContentCryptorImplTest.masterkey.GetCurrentRevision(), // Use current revision like in setup
-                    differentDirId, null); // Provide null for children
+                    differentDirId); // Removed null for children
 
                 IDirectoryContentCryptor.Decrypting differentDirIdDec =
                     DirectoryContentCryptorImplTest.dirCryptor.FileNameDecryptor(differentDirIdMetadata);

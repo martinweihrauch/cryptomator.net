@@ -226,7 +226,7 @@ static long ProcessDirectory(Vault vault, string sourceDir, string targetEncrypt
             {
                 Console.WriteLine($"    Reusing existing directory structure at: {fullTargetSubDirPath}");
                 byte[] encryptedMetadataBytes = File.ReadAllBytes(dirUvfPath);
-                subDirMetadata = vault.DecryptDirectoryMetadata(encryptedMetadataBytes, subDirMetadata.DirId); 
+                subDirMetadata = vault.DecryptDirectoryMetadata(encryptedMetadataBytes); 
             }
 
             // 6. Recursively process the subdirectory
@@ -298,7 +298,7 @@ static long DecryptDirectory(Vault vault, string encryptedDirPath, string target
             }
             
             byte[] encryptedMetadataBytes = File.ReadAllBytes(dirUvfPath);
-            DirectoryMetadata subDirMetadata = vault.DecryptDirectoryMetadata(encryptedMetadataBytes, "TODO_NEEDS_ACTUAL_DIR_ID_FOR_THIS_PATH"); 
+            DirectoryMetadata subDirMetadata = vault.DecryptDirectoryMetadata(encryptedMetadataBytes);
             
             string subDirName = $"Folder_{Path.GetFileName(potentialSubDir)}";
             string targetSubDirPath = Path.Combine(targetDecryptedPath, subDirName);

@@ -4,8 +4,6 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 using UvfLib.Api;
 using UvfLib.Common;
 
@@ -21,13 +19,6 @@ namespace UvfLib.V3
         private readonly RevolvingMasterkey _masterkey;
         private readonly RandomNumberGenerator _random;
         private readonly CryptorImpl _cryptor;
-
-        // JSON serializer options for consistent dir.uvf content
-        private static readonly JsonSerializerOptions DirUvfJsonOptions = new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase, // Matches VaultChildItem attributes
-            WriteIndented = false // Compact JSON for storage
-        };
 
         /// <summary>
         /// Creates a new directory content cryptor.
@@ -46,182 +37,100 @@ namespace UvfLib.V3
 
         /// <summary>
         /// Gets the root directory metadata.
-        /// The root directory initially has no children.
         /// </summary>
         /// <returns>The root directory metadata</returns>
         public DirectoryMetadata RootDirectoryMetadata()
         {
             byte[] dirId = _masterkey.GetRootDirId();
-            // Root directory starts with no children; they are added as content is processed.
-            return new DirectoryMetadataImpl(_masterkey.GetFirstRevision(), dirId, new List<VaultChildItem>());
+            return new DirectoryMetadataImpl(_masterkey.GetFirstRevision(), dirId);
         }
 
         /// <summary>
         /// Creates a new directory metadata object, typically for a new subdirectory.
-        /// The new directory initially has no children.
         /// </summary>
         /// <returns>The new directory metadata</returns>
         public DirectoryMetadata NewDirectoryMetadata()
         {
             byte[] dirId = new byte[Constants.DIR_ID_SIZE]; // Use defined constant
             _random.GetBytes(dirId);
-            // New directories start with no children.
-            return new DirectoryMetadataImpl(_masterkey.GetCurrentRevision(), dirId, new List<VaultChildItem>());
+            return new DirectoryMetadataImpl(_masterkey.GetCurrentRevision(), dirId);
         }
 
         /// <summary>
         /// Decrypts the given directory metadata (content of a dir.uvf file).
+        /// According to the UVF spec, dir.uvf contains only the 32-byte directory ID.
         /// </summary>
         /// <param name="ciphertext">The encrypted directory metadata (full content of dir.uvf, including its header).</param>
-        /// <param name="directorysOwnDirIdBytes">The raw DirId bytes of the directory to which this ciphertext belongs. This is crucial context.</param>
-        /// <returns>The decrypted directory metadata, including its list of children.</returns>
+        /// <returns>The decrypted directory metadata.</returns>
         /// <exception cref="AuthenticationFailedException">If the ciphertext is unauthentic.</exception>
         /// <exception cref="ArgumentException">If ciphertext is invalid.</exception>
-        /// <exception cref="JsonException">If the decrypted payload is not valid JSON or cannot be parsed.</exception>
-        public DirectoryMetadata DecryptDirectoryMetadata(byte[] ciphertext, byte[] directorysOwnDirIdBytes)
+        public DirectoryMetadata DecryptDirectoryMetadata(byte[] ciphertext)
         {
-            if (ciphertext == null || ciphertext.Length < FileHeaderImpl.SIZE + Constants.GCM_NONCE_SIZE + Constants.GCM_TAG_SIZE) // Minimum size: header + nonce + tag (empty content)
+            // According to Java implementation, dir.uvf is always 128 bytes
+            if (ciphertext == null || ciphertext.Length != 128)
             {
-                throw new ArgumentException($"Ciphertext too short. Minimum length is {FileHeaderImpl.SIZE + Constants.GCM_NONCE_SIZE + Constants.GCM_TAG_SIZE} bytes.", nameof(ciphertext));
-            }
-            if (directorysOwnDirIdBytes == null || directorysOwnDirIdBytes.Length != Constants.DIR_ID_SIZE)
-            {
-                throw new ArgumentException($"Directory's own DirId must be {Constants.DIR_ID_SIZE} bytes.", nameof(directorysOwnDirIdBytes));
+                throw new ArgumentException($"Invalid dir.uvf length: expected 128 bytes, got {ciphertext?.Length ?? 0}", nameof(ciphertext));
             }
 
             // Decrypt the file header (first 80 bytes of dir.uvf)
-            var headerCryptor = _cryptor.FileHeaderCryptor(); // Uses current masterkey revision by default
+            var headerCryptor = _cryptor.FileHeaderCryptor();
             FileHeader header = headerCryptor.DecryptHeader(ciphertext.AsSpan(0, FileHeaderImpl.SIZE).ToArray());
             var fileHeaderImpl = FileHeaderImpl.Cast(header);
 
-            // Extract the nonce (12 bytes) which follows the header
-            byte[] nonce = ciphertext.AsSpan(FileHeaderImpl.SIZE, Constants.GCM_NONCE_SIZE).ToArray();
-
-            // The actual encrypted content payload is after the header and nonce, and before the GCM tag
-            int encryptedPayloadLength = ciphertext.Length - FileHeaderImpl.SIZE - Constants.GCM_NONCE_SIZE - Constants.GCM_TAG_SIZE;
-            if (encryptedPayloadLength < 0) {
-                 throw new ArgumentException("Invalid ciphertext structure: not enough data for payload and tag after header and nonce.", nameof(ciphertext));
-            }
-            ReadOnlyMemory<byte> encryptedPayload = new ReadOnlyMemory<byte>(ciphertext, FileHeaderImpl.SIZE + Constants.GCM_NONCE_SIZE, encryptedPayloadLength);
-            ReadOnlyMemory<byte> tag = new ReadOnlyMemory<byte>(ciphertext, FileHeaderImpl.SIZE + Constants.GCM_NONCE_SIZE + encryptedPayloadLength, Constants.GCM_TAG_SIZE);
-
-            // Decrypt the content payload using AES-GCM
-            byte[] contentKeyBytes = fileHeaderImpl.GetContentKey().GetEncoded();
-            using var contentKey = new DestroyableSecretKey(contentKeyBytes, fileHeaderImpl.GetContentKey().Algorithm);
+            // The remaining 48 bytes contain the encrypted dirId (32 bytes) + GCM tag (16 bytes)
+            // Use FileContentCryptor to decrypt the chunk
+            var fileContentCryptor = _cryptor.FileContentCryptor();
+            ReadOnlyMemory<byte> encryptedChunk = new ReadOnlyMemory<byte>(ciphertext, FileHeaderImpl.SIZE, ciphertext.Length - FileHeaderImpl.SIZE);
             
-            // AAD for dir.uvf content decryption: chunk number (0) + header nonce (from *its own* header) + DirId (of *this* directory)
-            byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(0); 
-            byte[] headerNonceFromDirUvf = fileHeaderImpl.GetNonce(); 
+            // Decrypt as chunk 0 with last chunk flag set to true
+            byte[] decryptedDirId = fileContentCryptor.DecryptChunk(encryptedChunk, 0, header, true).ToArray();
             
-            // The DirId used in AAD for directory content is the DirId of the directory itself.
-            byte[] aad = ByteBuffers.Concat(chunkNumberBytes, headerNonceFromDirUvf, directorysOwnDirIdBytes);
-
-            byte[] decryptedPayloadBytes = new byte[encryptedPayloadLength];
-            try
+            if (decryptedDirId.Length != Constants.DIR_ID_SIZE)
             {
-                using var aesGcm = new AesGcm(contentKey.GetEncoded());
-                aesGcm.Decrypt(nonce, encryptedPayload.Span, tag.Span, decryptedPayloadBytes.AsSpan(), aad);
-            }
-            catch (CryptographicException ex) // Catches AEADBadTagException
-            {
-                throw new AuthenticationFailedException("Directory metadata (dir.uvf) decryption failed: authentication tag mismatch.", ex);
-            }
-            finally
-            {
-                UvfLib.Common.CryptographicOperations.ZeroMemory(aad);
-                UvfLib.Common.CryptographicOperations.ZeroMemory(contentKeyBytes);
-            }
-            
-            // Deserialize the decrypted payload (JSON string) into a list of VaultChildItem
-            List<VaultChildItem>? children;
-            try
-            {
-                // Assuming UTF-8 encoding for the JSON string
-                string jsonPayload = Encoding.UTF8.GetString(decryptedPayloadBytes);
-                children = JsonSerializer.Deserialize<List<VaultChildItem>>(jsonPayload, DirUvfJsonOptions);
-                if (children == null) {
-                    // Handle case where JSON is "null" or empty array resulting in null
-                    children = new List<VaultChildItem>();
-                }
-            }
-            catch (JsonException ex)
-            {
-                throw new JsonException("Failed to deserialize directory metadata payload (dir.uvf content). Invalid JSON format.", ex);
-            }
-            finally
-            {
-                UvfLib.Common.CryptographicOperations.ZeroMemory(decryptedPayloadBytes);
+                throw new InvalidOperationException($"Decrypted dirId has invalid length: expected {Constants.DIR_ID_SIZE}, got {decryptedDirId.Length}");
             }
 
             // Create and return the directory metadata
-            // The DirId for this DirectoryMetadataImpl is the one passed in (directorysOwnDirIdBytes)
-            return new DirectoryMetadataImpl(fileHeaderImpl.GetSeedId(), directorysOwnDirIdBytes, children);
+            return new DirectoryMetadataImpl(fileHeaderImpl.GetSeedId(), decryptedDirId);
+        }
+
+        // Keep the old method for backward compatibility but mark it obsolete
+        [Obsolete("Use DecryptDirectoryMetadata(byte[] ciphertext) instead. The dirId parameter is not used.")]
+        public DirectoryMetadata DecryptDirectoryMetadata(byte[] ciphertext, byte[] directorysOwnDirIdBytes)
+        {
+            return DecryptDirectoryMetadata(ciphertext);
         }
 
         /// <summary>
         /// Encrypts the given DirectoryMetadata to produce the content of a dir.uvf file.
+        /// According to the UVF spec, dir.uvf contains only the 32-byte directory ID.
         /// </summary>
-        /// <param name="directoryMetadata">The directory metadata to encrypt (contains its own DirId and list of children).</param>
-        /// <returns>The encrypted binary content for a dir.uvf file.</returns>
+        /// <param name="directoryMetadata">The directory metadata to encrypt.</param>
+        /// <returns>The encrypted binary content for a dir.uvf file (always 128 bytes).</returns>
         public byte[] EncryptDirectoryMetadata(DirectoryMetadata directoryMetadata)
         {
             DirectoryMetadataImpl metadataImpl = DirectoryMetadataImpl.Cast(directoryMetadata);
             
-            // Serialize the list of children to a JSON string, then to UTF-8 bytes
-            string jsonPayload = JsonSerializer.Serialize(metadataImpl.Children, DirUvfJsonOptions);
-            byte[] cleartextPayloadBytes = Encoding.UTF8.GetBytes(jsonPayload);
+            // Get the raw dirId bytes (32 bytes)
+            byte[] dirIdBytes = metadataImpl.GetDirIdBytes();
 
             // Create the header using the directory's own SeedId
             var headerCryptor = _cryptor.FileHeaderCryptor(metadataImpl.SeedId);
-            FileHeader header = headerCryptor.Create(); // Creates a new header with a new content key and nonce
-            Memory<byte> headerBytes = headerCryptor.EncryptHeader(header);
-            var fileHeaderImpl = FileHeaderImpl.Cast(header);
+            FileHeader header = headerCryptor.Create();
+            byte[] headerBytes = headerCryptor.EncryptHeader(header).ToArray();
 
-            // Generate a new nonce for this dir.uvf encryption operation
-            byte[] nonceForDirUvfEncryption = new byte[Constants.GCM_NONCE_SIZE];
-            _random.GetBytes(nonceForDirUvfEncryption);
-
-            // AAD for dir.uvf content encryption: chunk number (0) + header nonce (from *its own* header) + DirId (of *this* directory)
-            byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(0);
-            byte[] headerNonceFromDirUvf = fileHeaderImpl.GetNonce(); // Nonce from the header we just created
-            byte[] dirIdForAad = metadataImpl.GetDirIdBytes(); // DirId of the directory this metadata belongs to
-
-            byte[] aad = ByteBuffers.Concat(chunkNumberBytes, headerNonceFromDirUvf, dirIdForAad);
+            // Use FileContentCryptor to encrypt the dirId as a single chunk
+            var fileContentCryptor = _cryptor.FileContentCryptor();
+            ReadOnlyMemory<byte> dirIdMemory = new ReadOnlyMemory<byte>(dirIdBytes);
             
-            byte[] encryptedPayloadBytes = new byte[cleartextPayloadBytes.Length];
-            byte[] tag = new byte[Constants.GCM_TAG_SIZE];
-
-            byte[] contentKeyBytes = fileHeaderImpl.GetContentKey().GetEncoded();
-            using var contentKey = new DestroyableSecretKey(contentKeyBytes, fileHeaderImpl.GetContentKey().Algorithm);
-
-            try
-            {
-                using var aesGcm = new AesGcm(contentKey.GetEncoded());
-                aesGcm.Encrypt(
-                    nonceForDirUvfEncryption,
-                    cleartextPayloadBytes,
-                    encryptedPayloadBytes.AsSpan(),
-                    tag,
-                    aad);
-            }
-            finally
-            {
-                UvfLib.Common.CryptographicOperations.ZeroMemory(cleartextPayloadBytes);
-                UvfLib.Common.CryptographicOperations.ZeroMemory(aad);
-                UvfLib.Common.CryptographicOperations.ZeroMemory(contentKeyBytes);
-            }
-
-            // Combine: header (80 bytes) + nonceForDirUvfEncryption (12 bytes) + encryptedPayloadBytes + tag (16 bytes)
-            byte[] result = new byte[headerBytes.Length + nonceForDirUvfEncryption.Length + encryptedPayloadBytes.Length + tag.Length];
+            // Encrypt as chunk 0 with last chunk flag set to true
+            byte[] encryptedChunk = fileContentCryptor.EncryptChunk(dirIdMemory, 0, header).ToArray();
             
-            headerBytes.CopyTo(new Memory<byte>(result, 0, headerBytes.Length));
-            Buffer.BlockCopy(nonceForDirUvfEncryption, 0, result, headerBytes.Length, nonceForDirUvfEncryption.Length);
-            Buffer.BlockCopy(encryptedPayloadBytes, 0, result, headerBytes.Length + nonceForDirUvfEncryption.Length, encryptedPayloadBytes.Length);
-            Buffer.BlockCopy(tag, 0, result, headerBytes.Length + nonceForDirUvfEncryption.Length + encryptedPayloadBytes.Length, tag.Length);
+            // Combine header (80 bytes) + encrypted chunk (48 bytes) = 128 bytes total
+            byte[] result = new byte[headerBytes.Length + encryptedChunk.Length];
+            Buffer.BlockCopy(headerBytes, 0, result, 0, headerBytes.Length);
+            Buffer.BlockCopy(encryptedChunk, 0, result, headerBytes.Length, encryptedChunk.Length);
             
-            UvfLib.Common.CryptographicOperations.ZeroMemory(nonceForDirUvfEncryption); // Clean up nonce after use
-            // fileHeaderImpl.GetContentKey() and headerNonceFromDirUvf are from 'header' which is disposed by FileHeaderCryptor.
-
             return result;
         }
 

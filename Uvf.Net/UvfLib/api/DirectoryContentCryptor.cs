@@ -28,12 +28,21 @@ namespace UvfLib.Api
         byte[] EncryptDirectoryMetadata(DirectoryMetadata directoryMetadata);
 
         /// <summary>
+        /// Decrypts the given directory metadata (content of a dir.uvf file).
+        /// </summary>
+        /// <param name="ciphertext">The encrypted directory metadata (full content of dir.uvf, including its header).</param>
+        /// <returns>The decrypted directory metadata.</returns>
+        /// <exception cref="AuthenticationFailedException">If the ciphertext is unauthentic.</exception>
+        DirectoryMetadata DecryptDirectoryMetadata(byte[] ciphertext);
+
+        /// <summary>
         /// Decrypts directory metadata.
         /// </summary>
         /// <param name="ciphertext">The encrypted directory metadata (full content of dir.uvf, including its header).</param>
         /// <param name="directorysOwnDirIdBytes">The raw DirId bytes of the directory to which this ciphertext belongs. This is crucial context for AAD.</param>
         /// <returns>The decrypted directory metadata</returns>
         /// <exception cref="AuthenticationFailedException">If the ciphertext is unauthentic.</exception>
+        [Obsolete("Use DecryptDirectoryMetadata(byte[] ciphertext) instead. The dirId parameter is not used in v3.")]
         DirectoryMetadata DecryptDirectoryMetadata(byte[] ciphertext, byte[] directorysOwnDirIdBytes);
 
         /// <summary>

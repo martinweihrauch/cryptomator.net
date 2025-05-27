@@ -1,11 +1,10 @@
 using System;
-using System.Collections.Generic;
-// Ensure VaultChildItem is accessible; UvfLib.Api.VaultChildItem if needed, or just 'using UvfLib.Api;'
 
 namespace UvfLib.Api
 {
     /// <summary>
-    /// Represents directory metadata, including its unique ID, associated masterkey seed, and children.
+    /// Represents directory metadata stored in dir.uvf files.
+    /// According to the UVF specification, this contains only the directory ID and seed information.
     /// </summary>
     public interface DirectoryMetadata
     {
@@ -20,12 +19,5 @@ namespace UvfLib.Api
         /// used for cryptographic operations related to this directory and its direct children's names.
         /// </summary>
         int SeedId { get; }
-
-        /// <summary>
-        /// Gets a read-only list of child items (files and directories) 
-        /// contained within this directory. This list is typically populated 
-        /// when directory metadata (e.g., from a dir.uvf file) is decrypted.
-        /// </summary>
-        IReadOnlyList<VaultChildItem> Children { get; }
     }
 } 
