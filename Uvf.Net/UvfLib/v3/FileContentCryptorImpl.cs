@@ -105,6 +105,39 @@ namespace UvfLib.V3
         }
 
         /// <summary>
+        /// Calculates the ciphertext size of a cleartext.
+        /// This overrides the default interface method to correctly handle partial last chunks.
+        /// </summary>
+        /// <param name="cleartextSize">The cleartext size in bytes</param>
+        /// <returns>The ciphertext size in bytes</returns>
+        public long CiphertextSize(long cleartextSize) // cleartextSize is sourceFileSize
+        {
+            long totalEncryptedSize = (long)this.HeaderSize();
+
+            if (cleartextSize == 0)
+            {
+                // Empty file: header + one chunk (nonce + 0 payload + tag)
+                totalEncryptedSize += Constants.GCM_NONCE_SIZE + 0 + Constants.GCM_TAG_SIZE;
+            }
+            else
+            {
+                long numberOfFullChunks = cleartextSize / (long)this.CleartextChunkSize();
+                long remainingCleartextBytes = cleartextSize % (long)this.CleartextChunkSize();
+
+                // Add size for all full chunks
+                // this.CiphertextChunkSize() returns the size of a full ciphertext chunk (payload + overhead)
+                totalEncryptedSize += numberOfFullChunks * (long)this.CiphertextChunkSize(); 
+
+                if (remainingCleartextBytes > 0)
+                {
+                    // Last partial chunk: nonce + actual_remaining_payload_bytes + tag
+                    totalEncryptedSize += Constants.GCM_NONCE_SIZE + remainingCleartextBytes + Constants.GCM_TAG_SIZE;
+                }
+            }
+            return totalEncryptedSize;
+        }
+
+        /// <summary>
         /// Gets the header size in bytes.
         /// </summary>
         /// <returns>The header size in bytes</returns>
