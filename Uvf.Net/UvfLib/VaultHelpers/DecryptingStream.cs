@@ -28,6 +28,7 @@ namespace UvfLib.VaultHelpers
         private readonly Memory<byte> _plaintextChunkBuffer; // Buffer for decrypted chunk
         private int _plaintextBufferPosition = 0;
         private int _plaintextBufferLength = 0; // Actual valid data length in plaintext buffer
+        private long _currentChunkNumber = 0; // Added for incrementing chunk number
         private bool _isDisposed = false;
         private bool _endOfStreamReached = false;
 
@@ -122,7 +123,7 @@ namespace UvfLib.VaultHelpers
             _cryptor.FileContentCryptor().DecryptChunk(
                 new ReadOnlyMemory<byte>(_ciphertextChunkBuffer, 0, bytesRead),
                 _plaintextChunkBuffer,
-                0, // Chunk number - not strictly needed for decryption itself here
+                _currentChunkNumber++, // Use and increment chunk number
                 _fileHeader,
                 true); // Assume authentication is always required
 

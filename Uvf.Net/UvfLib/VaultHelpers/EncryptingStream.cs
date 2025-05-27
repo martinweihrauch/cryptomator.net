@@ -25,6 +25,7 @@ namespace UvfLib.VaultHelpers
         private readonly FileHeader _fileHeader;
         private readonly byte[] _cleartextChunkBuffer;
         private int _bufferPosition = 0;
+        private long _currentChunkNumber = 0;
         private bool _headerWritten = false;
         private bool _isDisposed = false;
 
@@ -87,7 +88,7 @@ namespace UvfLib.VaultHelpers
 
         private void EncryptAndWriteChunk(ReadOnlyMemory<byte> cleartextChunk)
         {
-            _cryptor.FileContentCryptor().EncryptChunk(cleartextChunk, _ciphertextChunkBuffer, 0, _fileHeader);
+            _cryptor.FileContentCryptor().EncryptChunk(cleartextChunk, _ciphertextChunkBuffer, _currentChunkNumber++, _fileHeader);
             
             // Calculate the actual length of the encrypted data for this chunk
             int actualEncryptedLength = V3.Constants.GCM_NONCE_SIZE + cleartextChunk.Length + V3.Constants.GCM_TAG_SIZE;
