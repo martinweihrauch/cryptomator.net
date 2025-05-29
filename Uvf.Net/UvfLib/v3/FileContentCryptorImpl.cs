@@ -147,6 +147,61 @@ namespace UvfLib.V3
         }
 
         /// <summary>
+        /// Encrypts a chunk of data using a provided AesGcm instance.
+        /// </summary>
+        /// <param name="aesGcm">The initialized AesGcm instance for file content encryption.</param>
+        /// <param name="cleartextChunk">The chunk to encrypt.</param>
+        /// <param name="ciphertextChunk">The buffer to store the encrypted chunk (must include space for nonce and tag).</param>
+        /// <param name="chunkNumber">The number of the chunk in the stream.</param>
+        /// <param name="headerNonce">The nonce from the file header.</param>
+        /// <param name="perChunkNonce">The unique nonce for this specific chunk.</param>
+        public void EncryptChunk(AesGcm aesGcm, ReadOnlyMemory<byte> cleartextChunk, Memory<byte> ciphertextChunk, long chunkNumber, ReadOnlySpan<byte> headerNonce, ReadOnlySpan<byte> perChunkNonce)
+        {
+            if (aesGcm == null) throw new ArgumentNullException(nameof(aesGcm));
+            if (cleartextChunk.IsEmpty) throw new ArgumentException("Cleartext chunk cannot be empty.", nameof(cleartextChunk));
+            if (perChunkNonce.Length != Constants.GCM_NONCE_SIZE) throw new ArgumentException($"Per-chunk nonce must be {Constants.GCM_NONCE_SIZE} bytes.", nameof(perChunkNonce));
+            
+            int expectedCiphertextLength = Constants.GCM_NONCE_SIZE + cleartextChunk.Length + Constants.GCM_TAG_SIZE;
+            if (ciphertextChunk.Length < expectedCiphertextLength) throw new ArgumentException($"Ciphertext buffer is too small. Expected at least {expectedCiphertextLength} bytes for nonce, data, and tag.", nameof(ciphertextChunk));
+
+            // Copy nonce to beginning of ciphertext
+            perChunkNonce.CopyTo(ciphertextChunk.Span);
+
+            // Prepare AAD: chunk number + header nonce
+            byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(chunkNumber); // Consider optimizing to avoid allocation
+            // AAD = chunkNumberBytes + headerNonce
+            // Since ReadOnlySpan<byte> cannot be directly concatenated without allocation,
+            // we use stackalloc if AAD size is small and known, or an array if larger/dynamic.
+            // For now, let's assume AAD can be constructed on the stack or a small pooled buffer if this becomes a hot path.
+            // To simplify, we'll do a temporary allocation for AAD here. This could be optimized.
+            byte[] aad = new byte[chunkNumberBytes.Length + headerNonce.Length];
+            chunkNumberBytes.CopyTo(aad, 0);
+            headerNonce.CopyTo(aad.AsSpan(chunkNumberBytes.Length));
+            
+            Debug.WriteLine($"Encrypting chunk {chunkNumber} with perChunkNonce: {Convert.ToHexString(perChunkNonce)} and AAD: {Convert.ToHexString(aad)}");
+
+            try
+            {
+                aesGcm.Encrypt(
+                    perChunkNonce,
+                    cleartextChunk.Span,
+                    ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE, cleartextChunk.Length).Span,
+                    ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE + cleartextChunk.Length, Constants.GCM_TAG_SIZE).Span, // Tag destination
+                    aad);
+            }
+            catch (CryptographicException ex)
+            {
+                Debug.WriteLine($"Encryption failed for chunk {chunkNumber}: {ex.Message}");
+                throw new CryptoException("Encryption failed", ex);
+            }
+            finally
+            {
+                // ZeroMemory for aad if it was on heap and contains sensitive data derived from keys not just public numbers
+                // chunkNumberBytes is public, headerNonce is public. So direct aad zeroing is less critical here.
+            }
+        }
+
+        /// <summary>
         /// Encrypts a chunk of data.
         /// </summary>
         /// <param name="cleartextChunk">The chunk to encrypt</param>
@@ -155,9 +210,15 @@ namespace UvfLib.V3
         /// <returns>The encrypted chunk</returns>
         public Memory<byte> EncryptChunk(ReadOnlyMemory<byte> cleartextChunk, long chunkNumber, FileHeader header)
         {
-            var ciphertextChunk = new Memory<byte>(new byte[Constants.CHUNK_SIZE]);
-            EncryptChunk(cleartextChunk, ciphertextChunk, chunkNumber, header);
-            return ciphertextChunk;
+            // Calculate actual required ciphertext size
+            int actualCiphertextLength = Constants.GCM_NONCE_SIZE + cleartextChunk.Length + Constants.GCM_TAG_SIZE;
+            var ciphertextBuffer = new Memory<byte>(new byte[actualCiphertextLength]); // Allocate only what's needed
+
+            // Call the internal encrypt method that populates this buffer
+            // This specific call path is for dir.uvf or similar one-off encryptions not going through EncryptingStream.
+            EncryptChunk(cleartextChunk, ciphertextBuffer, chunkNumber, header); 
+            
+            return ciphertextBuffer; // Return the correctly sized buffer
         }
 
         /// <summary>
@@ -229,6 +290,61 @@ namespace UvfLib.V3
         }
 
         /// <summary>
+        /// Decrypts a chunk of data using a provided AesGcm instance.
+        /// </summary>
+        /// <param name="aesGcm">The initialized AesGcm instance for file content decryption.</param>
+        /// <param name="ciphertextChunk">The encrypted chunk (must include nonce at the beginning and tag at the end).</param>
+        /// <param name="cleartextChunk">The buffer to store the decrypted chunk.</param>
+        /// <param name="chunkNumber">The number of the chunk in the stream.</param>
+        /// <param name="headerNonce">The nonce from the file header.</param>
+        /// <returns>The number of bytes written to the cleartextChunk.</returns>
+        /// <exception cref="AuthenticationFailedException">If authentication fails.</exception>
+        public int DecryptChunk(AesGcm aesGcm, ReadOnlyMemory<byte> ciphertextChunk, Memory<byte> cleartextChunk, long chunkNumber, ReadOnlySpan<byte> headerNonce)
+        {
+            if (aesGcm == null) throw new ArgumentNullException(nameof(aesGcm));
+            if (ciphertextChunk.Length < Constants.GCM_NONCE_SIZE + Constants.GCM_TAG_SIZE) throw new ArgumentException("Ciphertext chunk is too small to contain nonce and tag.", nameof(ciphertextChunk));
+
+            ReadOnlySpan<byte> nonce = ciphertextChunk.Slice(0, Constants.GCM_NONCE_SIZE).Span;
+            
+            int payloadSize = ciphertextChunk.Length - Constants.GCM_NONCE_SIZE - Constants.GCM_TAG_SIZE;
+            if (payloadSize < 0) throw new ArgumentException("Ciphertext chunk has invalid size (payload would be negative).", nameof(ciphertextChunk)); // Should be caught by prior check too
+            if (cleartextChunk.Length < payloadSize) throw new ArgumentException("Cleartext buffer is too small for the decrypted payload.", nameof(cleartextChunk));
+
+            ReadOnlySpan<byte> tag = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE + payloadSize, Constants.GCM_TAG_SIZE).Span;
+            ReadOnlySpan<byte> ciphertextPayload = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE, payloadSize).Span;
+
+            // Prepare AAD: chunk number + header nonce
+            byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(chunkNumber); // Optimize to avoid allocation
+            // Similar to encryption, AAD construction could be optimized.
+            byte[] aad = new byte[chunkNumberBytes.Length + headerNonce.Length];
+            chunkNumberBytes.CopyTo(aad, 0);
+            headerNonce.CopyTo(aad.AsSpan(chunkNumberBytes.Length));
+
+            Debug.WriteLine($"Decrypting chunk {chunkNumber} with nonce: {Convert.ToHexString(nonce)}, AAD: {Convert.ToHexString(aad)}, tag: {Convert.ToHexString(tag)}");
+            
+            try
+            {
+                aesGcm.Decrypt(
+                    nonce,
+                    ciphertextPayload,
+                    tag,
+                    cleartextChunk.Slice(0, payloadSize).Span,
+                    aad);
+                
+                return payloadSize;
+            }
+            catch (CryptographicException ex)
+            {
+                Debug.WriteLine($"Decryption failed for chunk {chunkNumber}: {ex.Message}");
+                throw new AuthenticationFailedException("Chunk decryption failed, possibly due to invalid authentication tag.", ex);
+            }
+            finally
+            {
+                // ZeroMemory for aad if it was on heap and contains sensitive data
+            }
+        }
+
+        /// <summary>
         /// Decrypts a chunk of data.
         /// </summary>
         /// <param name="ciphertextChunk">The encrypted chunk</param>
@@ -239,15 +355,34 @@ namespace UvfLib.V3
         /// <exception cref="AuthenticationFailedException">If authentication fails</exception>
         public Memory<byte> DecryptChunk(ReadOnlyMemory<byte> ciphertextChunk, long chunkNumber, FileHeader header, bool authenticate)
         {
-            ValidateDecryptionParameters(ciphertextChunk, Memory<byte>.Empty, header, authenticate);
+            // ValidateDecryptionParameters(ciphertextChunk, Memory<byte>.Empty, header, authenticate);
+            // The ValidateDecryptionParameters has a check for cleartextChunk.IsEmpty which is not applicable here
+            // as we are creating the buffer. We'll rely on inline checks or a more specific validation.
 
-            // Allocate buffer for plaintext - max size is payload size
-            var cleartextChunk = new Memory<byte>(new byte[Constants.PAYLOAD_SIZE]);
+            if (header == null) throw new ArgumentNullException(nameof(header));
+            if (!authenticate) throw new UnsupportedOperationException("Authentication cannot be disabled for GCM mode");
+            if (ciphertextChunk.Length < Constants.GCM_NONCE_SIZE + Constants.GCM_TAG_SIZE) throw new ArgumentException($"Ciphertext chunk must be at least {Constants.GCM_NONCE_SIZE + Constants.GCM_TAG_SIZE} bytes to contain nonce and tag.", nameof(ciphertextChunk));
+            // Unlike stream processing, for a single dir.uvf chunk, ciphertextChunk.Length should be exactly nonce+payload+tag.
+            // However, the existing method doesn't enforce this, so we keep it flexible for now.
+            // if (ciphertextChunk.Length > Constants.CHUNK_SIZE) throw new ArgumentException($"Ciphertext chunk must not exceed {Constants.CHUNK_SIZE} bytes", nameof(ciphertextChunk));
 
-            // Decrypt
-            DecryptChunk(ciphertextChunk, cleartextChunk, chunkNumber, header, authenticate);
 
-            return cleartextChunk;
+            int actualPayloadSize = ciphertextChunk.Length - Constants.GCM_NONCE_SIZE - Constants.GCM_TAG_SIZE;
+            if (actualPayloadSize < 0) 
+            {
+                throw new ArgumentException("Ciphertext chunk is too small to contain valid payload after accounting for nonce and tag.", nameof(ciphertextChunk));
+            }
+            
+            // Allocate buffer for plaintext - precisely the payload size
+            var cleartextBuffer = new Memory<byte>(new byte[actualPayloadSize]);
+
+            // Decrypt (this calls the internal void DecryptChunk)
+            // The void DecryptChunk will internally check if cleartextBuffer is large enough for its derived payloadSize.
+            int bytesDecrypted = DecryptChunk(ciphertextChunk, cleartextBuffer, chunkNumber, header, authenticate);
+
+            // Ensure the returned slice matches the actual number of bytes decrypted,
+            // which should be equal to actualPayloadSize.
+            return cleartextBuffer.Slice(0, bytesDecrypted); 
         }
 
         /// <summary>
@@ -356,9 +491,10 @@ namespace UvfLib.V3
                 throw new ArgumentException($"Cleartext chunk size exceeds maximum of {Constants.PAYLOAD_SIZE} bytes", nameof(cleartextChunk));
             }
 
-            if (ciphertextChunk.Length < Constants.CHUNK_SIZE)
+            int requiredCiphertextLength = Constants.GCM_NONCE_SIZE + cleartextChunk.Length + Constants.GCM_TAG_SIZE;
+            if (ciphertextChunk.Length < requiredCiphertextLength)
             {
-                throw new ArgumentException($"Ciphertext chunk buffer must be at least {Constants.CHUNK_SIZE} bytes", nameof(ciphertextChunk));
+                throw new ArgumentException($"Ciphertext chunk buffer must be at least {requiredCiphertextLength} bytes to hold nonce, data, and tag.", nameof(ciphertextChunk));
             }
         }
 

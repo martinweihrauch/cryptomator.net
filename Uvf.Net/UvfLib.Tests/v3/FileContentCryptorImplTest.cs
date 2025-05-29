@@ -137,8 +137,9 @@ namespace UvfLib.Tests.V3
         public void TestEncryptChunkWithInvalidCiphertextBufferSize()
         {
             // Arrange
-            ReadOnlyMemory<byte> cleartext = Encoding.ASCII.GetBytes("test");
-            Memory<byte> ciphertext = new byte[_fileContentCryptor.CiphertextChunkSize() - 1]; // Too small
+            ReadOnlyMemory<byte> cleartext = Encoding.ASCII.GetBytes("test"); // cleartext.Length is 4
+            int actualRequiredSize = V3Constants.GCM_NONCE_SIZE + cleartext.Length + V3Constants.GCM_TAG_SIZE; // 12 + 4 + 16 = 32
+            Memory<byte> ciphertext = new byte[actualRequiredSize - 1]; // Provide a buffer that is truly too small (e.g., 31 bytes)
 
             // Act & Assert
             Assert.ThrowsException<ArgumentException>(() =>

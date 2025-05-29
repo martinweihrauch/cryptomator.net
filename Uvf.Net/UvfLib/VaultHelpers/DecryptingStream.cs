@@ -12,6 +12,7 @@
 
 using UvfLib.Api;
 using UvfLib.V3;
+using System.Security.Cryptography;
 
 namespace UvfLib.VaultHelpers
 {
@@ -24,6 +25,7 @@ namespace UvfLib.VaultHelpers
         private readonly Stream _inputStream;
         private readonly bool _leaveOpen;
         private readonly FileHeader _fileHeader;
+        private AesGcm _fileContentAesGcm; // Added to manage AesGcm instance
         private readonly byte[] _ciphertextChunkBuffer;
         private readonly Memory<byte> _plaintextChunkBuffer; // Buffer for decrypted chunk
         private int _plaintextBufferPosition = 0;
@@ -57,6 +59,11 @@ namespace UvfLib.VaultHelpers
                 throw new InvalidCiphertextException("Input stream ended before header could be fully read.");
             }
             _fileHeader = _cryptor.FileHeaderCryptor().DecryptHeader(encryptedHeader);
+
+            // 1.1 Initialize AesGcm for file content
+            var fileContentKeyBytes = ((V3.FileHeaderImpl)_fileHeader).GetContentKey().GetEncoded();
+            _fileContentAesGcm = new AesGcm(fileContentKeyBytes);
+            // Assuming DestroyableSecretKey.GetEncoded() returns a copy, the original within FileHeader is managed by its Dispose.
         }
 
         public override int Read(byte[] buffer, int offset, int count)
@@ -120,15 +127,16 @@ namespace UvfLib.VaultHelpers
             }
 
             // Decrypt the chunk
-            _cryptor.FileContentCryptor().DecryptChunk(
+            _plaintextBufferLength = ((V3.FileContentCryptorImpl)_cryptor.FileContentCryptor()).DecryptChunk(
+                _fileContentAesGcm,
                 new ReadOnlyMemory<byte>(_ciphertextChunkBuffer, 0, bytesRead),
                 _plaintextChunkBuffer,
                 _currentChunkNumber++, // Use and increment chunk number
-                _fileHeader,
-                true); // Assume authentication is always required
+                ((V3.FileHeaderImpl)_fileHeader).GetNonce() // Header nonce
+            );
 
             // Calculate the actual plaintext length from the ciphertext length
-            _plaintextBufferLength = bytesRead - V3.Constants.GCM_NONCE_SIZE - V3.Constants.GCM_TAG_SIZE;
+            // _plaintextBufferLength = bytesRead - V3.Constants.GCM_NONCE_SIZE - V3.Constants.GCM_TAG_SIZE;
             _plaintextBufferPosition = 0;
 
             // If the last read was less than a full chunk, mark end of stream
@@ -173,6 +181,7 @@ namespace UvfLib.VaultHelpers
                 if (disposing)
                 {
                     // Clean up resources
+                    _fileContentAesGcm?.Dispose(); // Dispose AesGcm
                     _fileHeader?.Dispose(); // Dispose the content key within the header
 
                     if (!_leaveOpen)

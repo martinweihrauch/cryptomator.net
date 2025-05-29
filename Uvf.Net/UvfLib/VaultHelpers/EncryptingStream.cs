@@ -11,6 +11,7 @@
 
 
 using UvfLib.Api;
+using System.Security.Cryptography;
 
 namespace UvfLib.VaultHelpers
 {
@@ -23,6 +24,8 @@ namespace UvfLib.VaultHelpers
         private readonly Stream _outputStream;
         private readonly bool _leaveOpen;
         private readonly FileHeader _fileHeader;
+        private AesGcm _fileContentAesGcm; // Added to manage AesGcm instance
+        private readonly RandomNumberGenerator _random; // Added for generating per-chunk nonces
         private readonly byte[] _cleartextChunkBuffer;
         private int _bufferPosition = 0;
         private long _currentChunkNumber = 0;
@@ -37,6 +40,7 @@ namespace UvfLib.VaultHelpers
             _cryptor = cryptor ?? throw new ArgumentNullException(nameof(cryptor));
             _outputStream = outputStream ?? throw new ArgumentNullException(nameof(outputStream));
             _leaveOpen = leaveOpen;
+            _random = RandomNumberGenerator.Create(); // Initialize RNG
 
             if (!_outputStream.CanWrite) throw new ArgumentException("Output stream must be writable.", nameof(outputStream));
             if (_cryptor.FileHeaderCryptor() == null || _cryptor.FileContentCryptor() == null)
@@ -44,6 +48,12 @@ namespace UvfLib.VaultHelpers
 
             // 1. Create header
             _fileHeader = _cryptor.FileHeaderCryptor().Create();
+
+            // 1.1 Initialize AesGcm for file content
+            var fileContentKeyBytes = ((V3.FileHeaderImpl)_fileHeader).GetContentKey().GetEncoded();
+            _fileContentAesGcm = new AesGcm(fileContentKeyBytes);
+            // It's crucial to zero out fileContentKeyBytes if it's no longer needed elsewhere after this line.
+            // Assuming DestroyableSecretKey.GetEncoded() returns a copy, the original within FileHeader is managed by its Dispose.
 
             // Allocate buffers
             _cleartextChunkBuffer = new byte[CLEARTEXT_CHUNK_SIZE];
@@ -88,7 +98,17 @@ namespace UvfLib.VaultHelpers
 
         private void EncryptAndWriteChunk(ReadOnlyMemory<byte> cleartextChunk)
         {
-            _cryptor.FileContentCryptor().EncryptChunk(cleartextChunk, _ciphertextChunkBuffer, _currentChunkNumber++, _fileHeader);
+            byte[] perChunkNonce = new byte[V3.Constants.GCM_NONCE_SIZE];
+            _random.GetBytes(perChunkNonce);
+
+            ((V3.FileContentCryptorImpl)_cryptor.FileContentCryptor()).EncryptChunk(
+                _fileContentAesGcm,
+                cleartextChunk,
+                _ciphertextChunkBuffer, 
+                _currentChunkNumber++,
+                ((V3.FileHeaderImpl)_fileHeader).GetNonce(), // Header nonce
+                perChunkNonce // Per-chunk nonce
+            );
             
             // Calculate the actual length of the encrypted data for this chunk
             int actualEncryptedLength = V3.Constants.GCM_NONCE_SIZE + cleartextChunk.Length + V3.Constants.GCM_TAG_SIZE;
@@ -126,12 +146,14 @@ namespace UvfLib.VaultHelpers
                     finally
                     {
                         // Clean up resources
+                        _fileContentAesGcm?.Dispose(); // Dispose AesGcm
                         _fileHeader?.Dispose(); // Dispose the content key within the header
 
                         if (!_leaveOpen)
                         {
                             _outputStream?.Dispose();
                         }
+                        _random?.Dispose(); // Dispose RNG
                     }
                 }
                 _isDisposed = true;
