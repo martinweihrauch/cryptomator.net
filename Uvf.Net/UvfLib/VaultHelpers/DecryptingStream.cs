@@ -13,6 +13,7 @@
 using UvfLib.Api;
 using UvfLib.V3;
 using System.Security.Cryptography;
+using System.Buffers.Binary;
 
 namespace UvfLib.VaultHelpers
 {
@@ -25,17 +26,19 @@ namespace UvfLib.VaultHelpers
         private readonly Stream _inputStream;
         private readonly bool _leaveOpen;
         private readonly FileHeader _fileHeader;
-        private AesGcm _fileContentAesGcm; // Added to manage AesGcm instance
+        private AesGcm _fileContentAesGcm;
         private readonly byte[] _ciphertextChunkBuffer;
-        private readonly Memory<byte> _plaintextChunkBuffer; // Buffer for decrypted chunk
+        private readonly Memory<byte> _plaintextChunkBuffer;
+        private readonly byte[] _aadBuffer;
         private int _plaintextBufferPosition = 0;
-        private int _plaintextBufferLength = 0; // Actual valid data length in plaintext buffer
-        private long _currentChunkNumber = 0; // Added for incrementing chunk number
+        private int _plaintextBufferLength = 0;
+        private long _currentChunkNumber = 0;
         private bool _isDisposed = false;
         private bool _endOfStreamReached = false;
 
-        private const int CIPHERTEXT_CHUNK_SIZE = V3.Constants.CHUNK_SIZE;
+        // Revert to using constants from V3.Constants
         private const int PLAINTEXT_CHUNK_SIZE = V3.Constants.PAYLOAD_SIZE;
+        private const int CIPHERTEXT_CHUNK_SIZE = V3.Constants.CHUNK_SIZE;
 
         public DecryptingStream(Cryptor cryptor, Stream inputStream, bool leaveOpen)
         {
@@ -47,7 +50,7 @@ namespace UvfLib.VaultHelpers
             if (_cryptor.FileHeaderCryptor() == null || _cryptor.FileContentCryptor() == null)
                 throw new InvalidOperationException("Cryptor not fully initialized for file operations.");
 
-            // Allocate buffers
+            // Allocate buffers using the constants
             _ciphertextChunkBuffer = new byte[CIPHERTEXT_CHUNK_SIZE];
             _plaintextChunkBuffer = new Memory<byte>(new byte[PLAINTEXT_CHUNK_SIZE]);
 
@@ -64,6 +67,11 @@ namespace UvfLib.VaultHelpers
             var fileContentKeyBytes = ((V3.FileHeaderImpl)_fileHeader).GetContentKey().GetEncoded();
             _fileContentAesGcm = new AesGcm(fileContentKeyBytes);
             // Assuming DestroyableSecretKey.GetEncoded() returns a copy, the original within FileHeader is managed by its Dispose.
+
+            // Initialize AAD buffer: 8 bytes for chunk number + header nonce length
+            ReadOnlySpan<byte> headerNonce = ((V3.FileHeaderImpl)_fileHeader).GetNonce();
+            _aadBuffer = new byte[8 + headerNonce.Length];
+            headerNonce.CopyTo(_aadBuffer.AsSpan(8)); // Copy header nonce to the latter part of AAD buffer
         }
 
         public override int Read(byte[] buffer, int offset, int count)
@@ -104,10 +112,7 @@ namespace UvfLib.VaultHelpers
         {
             if (_endOfStreamReached) return false;
 
-            // Read the next ciphertext chunk
             int bytesRead = ReadUpTo(_inputStream, _ciphertextChunkBuffer, 0, CIPHERTEXT_CHUNK_SIZE);
-
-            // If nothing read, we're at the end
             if (bytesRead == 0)
             {
                 _endOfStreamReached = true;
@@ -116,30 +121,27 @@ namespace UvfLib.VaultHelpers
                 return false;
             }
 
-            // We expect full chunks until the end. An incomplete chunk might indicate truncation.
-            // GCM decryption requires the full chunk (nonce+ciphertext+tag).
-            // If bytesRead < MIN_CIPHERTEXT_SIZE (nonce+tag), it's definitely an error.
             int minCiphertextSize = V3.Constants.GCM_NONCE_SIZE + V3.Constants.GCM_TAG_SIZE;
             if (bytesRead < minCiphertextSize)
             {
-                _endOfStreamReached = true; // Prevent further reads
+                _endOfStreamReached = true;
                 throw new InvalidCiphertextException($"Incomplete ciphertext chunk read (read {bytesRead}, needed at least {minCiphertextSize}). Possible truncation or corruption.");
             }
 
-            // Decrypt the chunk
+            // Prepare AAD for the current chunk
+            BinaryPrimitives.WriteInt64BigEndian(_aadBuffer.AsSpan(0, 8), _currentChunkNumber);
+            // The headerNonce part is already in _aadBuffer[8..]
+
             _plaintextBufferLength = ((V3.FileContentCryptorImpl)_cryptor.FileContentCryptor()).DecryptChunk(
                 _fileContentAesGcm,
                 new ReadOnlyMemory<byte>(_ciphertextChunkBuffer, 0, bytesRead),
                 _plaintextChunkBuffer,
-                _currentChunkNumber++, // Use and increment chunk number
-                ((V3.FileHeaderImpl)_fileHeader).GetNonce() // Header nonce
+                _currentChunkNumber, // Pass chunk number for debug/logging if needed inside
+                _aadBuffer // Pass the fully constructed AAD buffer
             );
+            _currentChunkNumber++; // Increment chunk number AFTER using it for AAD
 
-            // Calculate the actual plaintext length from the ciphertext length
-            // _plaintextBufferLength = bytesRead - V3.Constants.GCM_NONCE_SIZE - V3.Constants.GCM_TAG_SIZE;
             _plaintextBufferPosition = 0;
-
-            // If the last read was less than a full chunk, mark end of stream
             if (bytesRead < CIPHERTEXT_CHUNK_SIZE)
             {
                 _endOfStreamReached = true;

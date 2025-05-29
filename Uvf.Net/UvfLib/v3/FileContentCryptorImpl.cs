@@ -153,12 +153,11 @@ namespace UvfLib.V3
         /// <param name="cleartextChunk">The chunk to encrypt.</param>
         /// <param name="ciphertextChunk">The buffer to store the encrypted chunk (must include space for nonce and tag).</param>
         /// <param name="chunkNumber">The number of the chunk in the stream.</param>
-        /// <param name="headerNonce">The nonce from the file header.</param>
         /// <param name="perChunkNonce">The unique nonce for this specific chunk.</param>
-        public void EncryptChunk(AesGcm aesGcm, ReadOnlyMemory<byte> cleartextChunk, Memory<byte> ciphertextChunk, long chunkNumber, ReadOnlySpan<byte> headerNonce, ReadOnlySpan<byte> perChunkNonce)
+        /// <param name="aad">The pre-constructed Associated Authenticated Data (chunkNumber + headerNonce).</param>
+        public void EncryptChunk(AesGcm aesGcm, ReadOnlyMemory<byte> cleartextChunk, Memory<byte> ciphertextChunk, long chunkNumber, ReadOnlySpan<byte> perChunkNonce, ReadOnlySpan<byte> aad)
         {
             if (aesGcm == null) throw new ArgumentNullException(nameof(aesGcm));
-            if (cleartextChunk.IsEmpty) throw new ArgumentException("Cleartext chunk cannot be empty.", nameof(cleartextChunk));
             if (perChunkNonce.Length != Constants.GCM_NONCE_SIZE) throw new ArgumentException($"Per-chunk nonce must be {Constants.GCM_NONCE_SIZE} bytes.", nameof(perChunkNonce));
             
             int expectedCiphertextLength = Constants.GCM_NONCE_SIZE + cleartextChunk.Length + Constants.GCM_TAG_SIZE;
@@ -166,17 +165,6 @@ namespace UvfLib.V3
 
             // Copy nonce to beginning of ciphertext
             perChunkNonce.CopyTo(ciphertextChunk.Span);
-
-            // Prepare AAD: chunk number + header nonce
-            byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(chunkNumber); // Consider optimizing to avoid allocation
-            // AAD = chunkNumberBytes + headerNonce
-            // Since ReadOnlySpan<byte> cannot be directly concatenated without allocation,
-            // we use stackalloc if AAD size is small and known, or an array if larger/dynamic.
-            // For now, let's assume AAD can be constructed on the stack or a small pooled buffer if this becomes a hot path.
-            // To simplify, we'll do a temporary allocation for AAD here. This could be optimized.
-            byte[] aad = new byte[chunkNumberBytes.Length + headerNonce.Length];
-            chunkNumberBytes.CopyTo(aad, 0);
-            headerNonce.CopyTo(aad.AsSpan(chunkNumberBytes.Length));
             
             Debug.WriteLine($"Encrypting chunk {chunkNumber} with perChunkNonce: {Convert.ToHexString(perChunkNonce)} and AAD: {Convert.ToHexString(aad)}");
 
@@ -296,10 +284,10 @@ namespace UvfLib.V3
         /// <param name="ciphertextChunk">The encrypted chunk (must include nonce at the beginning and tag at the end).</param>
         /// <param name="cleartextChunk">The buffer to store the decrypted chunk.</param>
         /// <param name="chunkNumber">The number of the chunk in the stream.</param>
-        /// <param name="headerNonce">The nonce from the file header.</param>
+        /// <param name="aad">The pre-constructed Associated Authenticated Data (chunkNumber + headerNonce).</param>
         /// <returns>The number of bytes written to the cleartextChunk.</returns>
         /// <exception cref="AuthenticationFailedException">If authentication fails.</exception>
-        public int DecryptChunk(AesGcm aesGcm, ReadOnlyMemory<byte> ciphertextChunk, Memory<byte> cleartextChunk, long chunkNumber, ReadOnlySpan<byte> headerNonce)
+        public int DecryptChunk(AesGcm aesGcm, ReadOnlyMemory<byte> ciphertextChunk, Memory<byte> cleartextChunk, long chunkNumber, ReadOnlySpan<byte> aad)
         {
             if (aesGcm == null) throw new ArgumentNullException(nameof(aesGcm));
             if (ciphertextChunk.Length < Constants.GCM_NONCE_SIZE + Constants.GCM_TAG_SIZE) throw new ArgumentException("Ciphertext chunk is too small to contain nonce and tag.", nameof(ciphertextChunk));
@@ -307,18 +295,11 @@ namespace UvfLib.V3
             ReadOnlySpan<byte> nonce = ciphertextChunk.Slice(0, Constants.GCM_NONCE_SIZE).Span;
             
             int payloadSize = ciphertextChunk.Length - Constants.GCM_NONCE_SIZE - Constants.GCM_TAG_SIZE;
-            if (payloadSize < 0) throw new ArgumentException("Ciphertext chunk has invalid size (payload would be negative).", nameof(ciphertextChunk)); // Should be caught by prior check too
+            if (payloadSize < 0) throw new ArgumentException("Ciphertext chunk has invalid size (payload would be negative).", nameof(ciphertextChunk));
             if (cleartextChunk.Length < payloadSize) throw new ArgumentException("Cleartext buffer is too small for the decrypted payload.", nameof(cleartextChunk));
 
             ReadOnlySpan<byte> tag = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE + payloadSize, Constants.GCM_TAG_SIZE).Span;
             ReadOnlySpan<byte> ciphertextPayload = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE, payloadSize).Span;
-
-            // Prepare AAD: chunk number + header nonce
-            byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(chunkNumber); // Optimize to avoid allocation
-            // Similar to encryption, AAD construction could be optimized.
-            byte[] aad = new byte[chunkNumberBytes.Length + headerNonce.Length];
-            chunkNumberBytes.CopyTo(aad, 0);
-            headerNonce.CopyTo(aad.AsSpan(chunkNumberBytes.Length));
 
             Debug.WriteLine($"Decrypting chunk {chunkNumber} with nonce: {Convert.ToHexString(nonce)}, AAD: {Convert.ToHexString(aad)}, tag: {Convert.ToHexString(tag)}");
             

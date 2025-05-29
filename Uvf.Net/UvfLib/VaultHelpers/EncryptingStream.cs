@@ -12,6 +12,7 @@
 
 using UvfLib.Api;
 using System.Security.Cryptography;
+using System.Buffers.Binary;
 
 namespace UvfLib.VaultHelpers
 {
@@ -24,15 +25,17 @@ namespace UvfLib.VaultHelpers
         private readonly Stream _outputStream;
         private readonly bool _leaveOpen;
         private readonly FileHeader _fileHeader;
-        private AesGcm _fileContentAesGcm; // Added to manage AesGcm instance
-        private readonly RandomNumberGenerator _random; // Added for generating per-chunk nonces
+        private AesGcm _fileContentAesGcm;
+        private readonly RandomNumberGenerator _random;
         private readonly byte[] _cleartextChunkBuffer;
+        private readonly byte[] _perChunkNonce;
+        private readonly byte[] _aadBuffer; // Buffer for AAD
         private int _bufferPosition = 0;
         private long _currentChunkNumber = 0;
         private bool _headerWritten = false;
         private bool _isDisposed = false;
 
-        private const int CLEARTEXT_CHUNK_SIZE = V3.Constants.PAYLOAD_SIZE;
+        private const int CLEARTEXT_CHUNK_SIZE = V3.Constants.PAYLOAD_SIZE; // Reverted to use constant
         private readonly Memory<byte> _ciphertextChunkBuffer; // Reusable buffer for encrypted output
 
         public EncryptingStream(Cryptor cryptor, Stream outputStream, bool leaveOpen)
@@ -40,24 +43,25 @@ namespace UvfLib.VaultHelpers
             _cryptor = cryptor ?? throw new ArgumentNullException(nameof(cryptor));
             _outputStream = outputStream ?? throw new ArgumentNullException(nameof(outputStream));
             _leaveOpen = leaveOpen;
-            _random = RandomNumberGenerator.Create(); // Initialize RNG
+            _random = RandomNumberGenerator.Create();
+            _perChunkNonce = new byte[V3.Constants.GCM_NONCE_SIZE];
 
             if (!_outputStream.CanWrite) throw new ArgumentException("Output stream must be writable.", nameof(outputStream));
             if (_cryptor.FileHeaderCryptor() == null || _cryptor.FileContentCryptor() == null)
                 throw new InvalidOperationException("Cryptor not fully initialized for file operations.");
 
-            // 1. Create header
             _fileHeader = _cryptor.FileHeaderCryptor().Create();
-
-            // 1.1 Initialize AesGcm for file content
             var fileContentKeyBytes = ((V3.FileHeaderImpl)_fileHeader).GetContentKey().GetEncoded();
             _fileContentAesGcm = new AesGcm(fileContentKeyBytes);
-            // It's crucial to zero out fileContentKeyBytes if it's no longer needed elsewhere after this line.
-            // Assuming DestroyableSecretKey.GetEncoded() returns a copy, the original within FileHeader is managed by its Dispose.
 
-            // Allocate buffers
-            _cleartextChunkBuffer = new byte[CLEARTEXT_CHUNK_SIZE];
+            _cleartextChunkBuffer = new byte[CLEARTEXT_CHUNK_SIZE]; // Uses the constant
+            // Ciphertext buffer size should also be based on the constant PAYLOAD_SIZE via CleartextChunkSize() or directly
             _ciphertextChunkBuffer = new Memory<byte>(new byte[_cryptor.FileContentCryptor().CiphertextChunkSize()]);
+            
+            // Initialize AAD buffer: 8 bytes for chunk number + header nonce length
+            ReadOnlySpan<byte> headerNonce = ((V3.FileHeaderImpl)_fileHeader).GetNonce();
+            _aadBuffer = new byte[8 + headerNonce.Length];
+            headerNonce.CopyTo(_aadBuffer.AsSpan(8)); // Copy header nonce to the latter part of AAD buffer
         }
 
         private void EnsureHeaderWritten()
@@ -98,19 +102,22 @@ namespace UvfLib.VaultHelpers
 
         private void EncryptAndWriteChunk(ReadOnlyMemory<byte> cleartextChunk)
         {
-            byte[] perChunkNonce = new byte[V3.Constants.GCM_NONCE_SIZE];
-            _random.GetBytes(perChunkNonce);
+            _random.GetBytes(_perChunkNonce);
+
+            // Prepare AAD for the current chunk
+            BinaryPrimitives.WriteInt64BigEndian(_aadBuffer.AsSpan(0, 8), _currentChunkNumber);
+            // The headerNonce part is already in _aadBuffer[8..]
 
             ((V3.FileContentCryptorImpl)_cryptor.FileContentCryptor()).EncryptChunk(
                 _fileContentAesGcm,
                 cleartextChunk,
                 _ciphertextChunkBuffer, 
-                _currentChunkNumber++,
-                ((V3.FileHeaderImpl)_fileHeader).GetNonce(), // Header nonce
-                perChunkNonce // Per-chunk nonce
+                _currentChunkNumber,
+                _perChunkNonce, 
+                _aadBuffer // Pass the fully constructed AAD buffer
             );
+            _currentChunkNumber++; // Increment chunk number AFTER using it for AAD
             
-            // Calculate the actual length of the encrypted data for this chunk
             int actualEncryptedLength = V3.Constants.GCM_NONCE_SIZE + cleartextChunk.Length + V3.Constants.GCM_TAG_SIZE;
             
             // Write only the valid portion of the ciphertext buffer
