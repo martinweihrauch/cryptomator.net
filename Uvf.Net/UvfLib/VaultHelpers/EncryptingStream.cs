@@ -13,6 +13,9 @@
 using UvfLib.Api;
 using System.Security.Cryptography;
 using System.Buffers.Binary;
+#if DEBUG
+using System.Diagnostics; // For Stopwatch
+#endif
 
 namespace UvfLib.VaultHelpers
 {
@@ -35,6 +38,10 @@ namespace UvfLib.VaultHelpers
         private bool _headerWritten = false;
         private bool _isDisposed = false;
 
+#if DEBUG
+        private readonly PerformanceMetrics _metrics;
+#endif
+
         private const int CLEARTEXT_CHUNK_SIZE = V3.Constants.PAYLOAD_SIZE; // Reverted to use constant
         private readonly Memory<byte> _ciphertextChunkBuffer; // Reusable buffer for encrypted output
 
@@ -45,6 +52,16 @@ namespace UvfLib.VaultHelpers
             _leaveOpen = leaveOpen;
             _random = RandomNumberGenerator.Create();
             _perChunkNonce = new byte[V3.Constants.GCM_NONCE_SIZE];
+
+#if DEBUG
+            _metrics = new PerformanceMetrics("EncryptingStream")
+            {
+                Operation1Name = "NonceGen",
+                Operation2Name = "AADPrep",
+                Operation3Name = "EncryptOp",
+                Operation4Name = "StreamWrite"
+            };
+#endif
 
             if (!_outputStream.CanWrite) throw new ArgumentException("Output stream must be writable.", nameof(outputStream));
             if (_cryptor.FileHeaderCryptor() == null || _cryptor.FileContentCryptor() == null)
@@ -102,26 +119,42 @@ namespace UvfLib.VaultHelpers
 
         private void EncryptAndWriteChunk(ReadOnlyMemory<byte> cleartextChunk)
         {
+#if DEBUG
+            _metrics.StartTiming();
+#endif
             _random.GetBytes(_perChunkNonce);
-
-            // Prepare AAD for the current chunk
+#if DEBUG
+            _metrics.StopTiming(ref _metrics.TotalOperation1TimeMs); // NonceGen
+            _metrics.StartTiming();
+#endif
             BinaryPrimitives.WriteInt64BigEndian(_aadBuffer.AsSpan(0, 8), _currentChunkNumber);
-            // The headerNonce part is already in _aadBuffer[8..]
-
+#if DEBUG
+            _metrics.StopTiming(ref _metrics.TotalOperation2TimeMs); // AADPrep
+            _metrics.StartTiming();
+#endif
             ((V3.FileContentCryptorImpl)_cryptor.FileContentCryptor()).EncryptChunk(
                 _fileContentAesGcm,
                 cleartextChunk,
                 _ciphertextChunkBuffer, 
                 _currentChunkNumber,
                 _perChunkNonce, 
-                _aadBuffer // Pass the fully constructed AAD buffer
+                _aadBuffer 
             );
-            _currentChunkNumber++; // Increment chunk number AFTER using it for AAD
+#if DEBUG
+            _metrics.StopTiming(ref _metrics.TotalOperation3TimeMs); // EncryptOp
+#endif
+            _currentChunkNumber++; 
             
             int actualEncryptedLength = V3.Constants.GCM_NONCE_SIZE + cleartextChunk.Length + V3.Constants.GCM_TAG_SIZE;
             
-            // Write only the valid portion of the ciphertext buffer
+#if DEBUG
+            _metrics.StartTiming();
+#endif
             _outputStream.Write(_ciphertextChunkBuffer.Slice(0, actualEncryptedLength).Span);
+#if DEBUG
+            _metrics.StopTiming(ref _metrics.TotalOperation4TimeMs); // StreamWrite
+            _metrics.IncrementChunksProcessed();
+#endif
         }
 
         public override void Flush()
@@ -147,20 +180,21 @@ namespace UvfLib.VaultHelpers
                 {
                     try
                     {
-                        // Ensure final chunk is written
                         Flush();
                     }
                     finally
                     {
-                        // Clean up resources
-                        _fileContentAesGcm?.Dispose(); // Dispose AesGcm
-                        _fileHeader?.Dispose(); // Dispose the content key within the header
+                        _fileContentAesGcm?.Dispose(); 
+                        _fileHeader?.Dispose(); 
 
                         if (!_leaveOpen)
                         {
                             _outputStream?.Dispose();
                         }
-                        _random?.Dispose(); // Dispose RNG
+                        _random?.Dispose(); 
+#if DEBUG
+                        _metrics?.Report();
+#endif
                     }
                 }
                 _isDisposed = true;

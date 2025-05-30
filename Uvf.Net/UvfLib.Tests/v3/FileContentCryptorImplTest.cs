@@ -1,7 +1,6 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using UvfLib.Api;
 using UvfLib.Common;
-using CommonConstants = UvfLib.Common.Constants;
 using UvfLib.Tests.Common;
 using UvfLib.V3;
 using System;

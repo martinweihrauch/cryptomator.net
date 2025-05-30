@@ -23,7 +23,6 @@ namespace UvfLib.VaultHelpers
 {
     /// <summary>
     /// Provides helper methods for vault key management (creation, password changes).
-    /// Internal to hide implementation details from the Vault facade user.
     /// </summary>
     internal static class VaultKeyHelper
     {

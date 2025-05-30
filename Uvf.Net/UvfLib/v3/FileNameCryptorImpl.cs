@@ -92,24 +92,18 @@ namespace UvfLib.V3
                 throw new ArgumentException("Directory ID must not be empty", nameof(dirId));
 
             byte[] hmacKeyBytes = _hmacKey.GetEncoded();
-            Debug.WriteLine($"C# HashDirectoryId - HMAC Key (B64): {Convert.ToBase64String(hmacKeyBytes)}");
-            Debug.WriteLine($"C# HashDirectoryId - Input dirId (B64): {Convert.ToBase64String(dirId)}");
-
+           
             // Use HMAC-SHA256 for hashing with the HMAC key derived from the master key
             using var hmac = new HMACSHA256(hmacKeyBytes);
             byte[] hash = hmac.ComputeHash(dirId);
-            Debug.WriteLine($"C# HashDirectoryId - Full HMAC (B64): {Convert.ToBase64String(hash)}");
 
             // Only use the first 20 bytes (160 bits) for compatibility with Java implementation
             byte[] truncatedHash = new byte[20];
             Array.Copy(hash, truncatedHash, 20);
-            Debug.WriteLine($"C# HashDirectoryId - Truncated HMAC (B64): {Convert.ToBase64String(truncatedHash)}");
 
             // Convert to uppercase Base32 string
             string base32Hash = Base32Encoding.ToString(truncatedHash);
-            Debug.WriteLine($"C# HashDirectoryId - Base32 Result (Before ToUpper): {base32Hash}");
             string finalResult = base32Hash.ToUpperInvariant();
-            Debug.WriteLine($"C# HashDirectoryId - Final Result: {finalResult}");
             return finalResult;
         }
 

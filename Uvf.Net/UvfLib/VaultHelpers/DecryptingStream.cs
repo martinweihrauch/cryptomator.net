@@ -14,6 +14,9 @@ using UvfLib.Api;
 using UvfLib.V3;
 using System.Security.Cryptography;
 using System.Buffers.Binary;
+#if DEBUG
+using System.Diagnostics;
+#endif
 
 namespace UvfLib.VaultHelpers
 {
@@ -36,6 +39,10 @@ namespace UvfLib.VaultHelpers
         private bool _isDisposed = false;
         private bool _endOfStreamReached = false;
 
+#if DEBUG
+        private readonly PerformanceMetrics _metrics;
+#endif
+
         // Revert to using constants from V3.Constants
         private const int PLAINTEXT_CHUNK_SIZE = V3.Constants.PAYLOAD_SIZE;
         private const int CIPHERTEXT_CHUNK_SIZE = V3.Constants.CHUNK_SIZE;
@@ -45,6 +52,16 @@ namespace UvfLib.VaultHelpers
             _cryptor = cryptor ?? throw new ArgumentNullException(nameof(cryptor));
             _inputStream = inputStream ?? throw new ArgumentNullException(nameof(inputStream));
             _leaveOpen = leaveOpen;
+
+#if DEBUG
+            _metrics = new PerformanceMetrics("DecryptingStream")
+            {
+                Operation1Name = "StreamRead",
+                Operation2Name = "AADPrep",
+                Operation3Name = "DecryptOp",
+                Operation4Name = null // Not measuring copy to output buffer here, focus on crypto path
+            };
+#endif
 
             if (!_inputStream.CanRead) throw new ArgumentException("Input stream must be readable.", nameof(inputStream));
             if (_cryptor.FileHeaderCryptor() == null || _cryptor.FileContentCryptor() == null)
@@ -112,7 +129,14 @@ namespace UvfLib.VaultHelpers
         {
             if (_endOfStreamReached) return false;
 
+#if DEBUG
+            _metrics.StartTiming();
+#endif
             int bytesRead = ReadUpTo(_inputStream, _ciphertextChunkBuffer, 0, CIPHERTEXT_CHUNK_SIZE);
+#if DEBUG
+            _metrics.StopTiming(ref _metrics.TotalOperation1TimeMs); // StreamRead
+#endif
+
             if (bytesRead == 0)
             {
                 _endOfStreamReached = true;
@@ -128,25 +152,32 @@ namespace UvfLib.VaultHelpers
                 throw new InvalidCiphertextException($"Incomplete ciphertext chunk read (read {bytesRead}, needed at least {minCiphertextSize}). Possible truncation or corruption.");
             }
 
-            // Prepare AAD for the current chunk
+#if DEBUG
+            _metrics.StartTiming();
+#endif
             BinaryPrimitives.WriteInt64BigEndian(_aadBuffer.AsSpan(0, 8), _currentChunkNumber);
-            // The headerNonce part is already in _aadBuffer[8..]
-
+#if DEBUG
+            _metrics.StopTiming(ref _metrics.TotalOperation2TimeMs); // AADPrep
+            _metrics.StartTiming();
+#endif
             _plaintextBufferLength = ((V3.FileContentCryptorImpl)_cryptor.FileContentCryptor()).DecryptChunk(
                 _fileContentAesGcm,
                 new ReadOnlyMemory<byte>(_ciphertextChunkBuffer, 0, bytesRead),
                 _plaintextChunkBuffer,
-                _currentChunkNumber, // Pass chunk number for debug/logging if needed inside
-                _aadBuffer // Pass the fully constructed AAD buffer
+                _currentChunkNumber, 
+                _aadBuffer 
             );
-            _currentChunkNumber++; // Increment chunk number AFTER using it for AAD
+#if DEBUG
+            _metrics.StopTiming(ref _metrics.TotalOperation3TimeMs); // DecryptOp
+            _metrics.IncrementChunksProcessed();
+#endif
+            _currentChunkNumber++; 
 
             _plaintextBufferPosition = 0;
             if (bytesRead < CIPHERTEXT_CHUNK_SIZE)
             {
                 _endOfStreamReached = true;
             }
-
             return true;
         }
 
@@ -190,6 +221,9 @@ namespace UvfLib.VaultHelpers
                     {
                         _inputStream?.Dispose();
                     }
+#if DEBUG
+                    _metrics?.Report();
+#endif
                 }
                 _isDisposed = true;
             }

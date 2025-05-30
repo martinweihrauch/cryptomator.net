@@ -630,6 +630,27 @@ namespace UvfLib
         }
 
         /// <summary>
+        /// Calculates the expected size of an encrypted file based on its original size.
+        /// </summary>
+        /// <param name="sourceFileSize">The size of the source file in bytes</param>
+        /// <returns>The expected size of the encrypted file in bytes</returns>
+        public static long CalculateExpectedEncryptedSize(long sourceFileSize)
+        {
+            return VaultFileHelper.CalculateExpectedEncryptedSize(sourceFileSize);
+        }
+
+        /// <summary>
+        /// Calculates the expected size of a decrypted file based on its encrypted size.
+        /// </summary>
+        /// <param name="encryptedFileSize">The size of the encrypted file in bytes</param>
+        /// <returns>The expected size of the decrypted file in bytes</returns>
+        /// <exception cref="ArgumentException">Thrown when the encrypted file size is invalid</exception>
+        public static long CalculateExpectedDecryptedSize(long encryptedFileSize)
+        {
+            return VaultFileHelper.CalculateExpectedDecryptedSize(encryptedFileSize);
+        }
+
+        /// <summary>
         /// Provides access to the underlying Cryptor instance.
         /// Primarily for advanced use cases or when direct access to cryptor sub-components is needed.
         /// </summary>

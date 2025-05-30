@@ -5,7 +5,7 @@ namespace UvfLib.V3
     /// <summary>
     /// Constants for v3 cryptography operations.
     /// </summary>
-    internal static class Constants
+    public static class Constants
     {
         /// <summary>
         /// UVF file extension.
@@ -30,7 +30,7 @@ namespace UvfLib.V3
         /// <summary>
         /// Size of the payload (32KB)
         /// </summary>
-        public const int PAYLOAD_SIZE = 512 * 1024;
+        public const int PAYLOAD_SIZE = 32 * 1024;
         
         /// <summary>
         /// Size of the GCM tag

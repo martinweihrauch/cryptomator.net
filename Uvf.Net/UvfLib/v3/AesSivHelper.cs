@@ -30,10 +30,6 @@ namespace UvfLib.V3
         /// <returns>The ciphertext (with SIV/Tag prepended)</returns>
         public static byte[] Encrypt(byte[] key, byte[] plaintext, byte[] ad)
         {
-            Debug.WriteLine("[AesSivHelper.Encrypt] Start");
-            Debug.WriteLine($"[AesSivHelper.Encrypt] Key: {Convert.ToBase64String(key)}");
-            Debug.WriteLine($"[AesSivHelper.Encrypt] Plaintext: {Convert.ToBase64String(plaintext)} ({Encoding.UTF8.GetString(plaintext)})");
-            Debug.WriteLine($"[AesSivHelper.Encrypt] AD: {(ad == null ? "null" : Convert.ToBase64String(ad))}");
 
             if (key == null || key.Length != 64)
             {
@@ -50,13 +46,10 @@ namespace UvfLib.V3
             byte[] k2 = new byte[32];
             Buffer.BlockCopy(key, 0, k1, 0, 32);
             Buffer.BlockCopy(key, 32, k2, 0, 32);
-            //Debug.WriteLine($"[AesSivHelper.Encrypt] K1 (MAC Key): {Convert.ToBase64String(k1)}");
-            //Debug.WriteLine($"[AesSivHelper.Encrypt] K2 (CTR Key): {Convert.ToBase64String(k2)}");
+
 
             // Step 1: Generate the SIV (Synthetic Initialization Vector) using S2V operation
-            //Debug.WriteLine("[AesSivHelper.Encrypt] Calculating S2V...");
             byte[] siv = S2V(k1, plaintext, ad != null ? new[] { ad } : Array.Empty<byte[]>());
-            //Debug.WriteLine($"[AesSivHelper.Encrypt] S2V Result (SIV/Tag): {Convert.ToBase64String(siv)}");
 
             // Step 2: Encrypt the plaintext using AES-CTR with modified SIV as counter
             byte[] modifiedSiv = new byte[BLOCK_SIZE];
@@ -64,20 +57,15 @@ namespace UvfLib.V3
             // Clear the most significant bit in the last 32 bits (per RFC5297)
             modifiedSiv[8] &= 0x7F;
             modifiedSiv[12] &= 0x7F;
-            //Debug.WriteLine($"[AesSivHelper.Encrypt] Modified SIV (CTR Counter IV): {Convert.ToBase64String(modifiedSiv)}");
 
             // Encrypt the plaintext with AES-CTR
-            //Debug.WriteLine("[AesSivHelper.Encrypt] Encrypting with CTR...");
             byte[] ciphertext = EncryptWithCtr(k2, modifiedSiv, plaintext);
-            //Debug.WriteLine($"[AesSivHelper.Encrypt] CTR Ciphertext (before SIV prepended): {Convert.ToBase64String(ciphertext)}");
 
             // Combine SIV and ciphertext
             byte[] result = new byte[siv.Length + ciphertext.Length];
             Buffer.BlockCopy(siv, 0, result, 0, siv.Length);
             Buffer.BlockCopy(ciphertext, 0, result, siv.Length, ciphertext.Length);
 
-            //Debug.WriteLine($"[AesSivHelper.Encrypt] Final Result (SIV + CTR Ciphertext): {Convert.ToBase64String(result)}");
-            //Debug.WriteLine("[AesSivHelper.Encrypt] End");
             return result;
         }
 
@@ -87,15 +75,13 @@ namespace UvfLib.V3
         /// </summary>
         private static byte[] S2V(byte[] key, byte[] plaintext, byte[][] associatedData)
         {
-            Debug.WriteLine("  [AesSivHelper.S2V] Start");
-            Debug.WriteLine($"  [AesSivHelper.S2V] K1 (MAC Key): {Convert.ToBase64String(key)}");
-            Debug.WriteLine($"  [AesSivHelper.S2V] Plaintext: {Convert.ToBase64String(plaintext)}");
-            Debug.WriteLine($"  [AesSivHelper.S2V] Associated Data Count: {associatedData.Length}");
+#if DEBUG_VERBOSE_AES_SIV
             for (int i = 0; i < associatedData.Length; i++)
             {
                 Debug.WriteLine($"    [AesSivHelper.S2V] AD[{i}]: {(associatedData[i] == null ? "null" : Convert.ToBase64String(associatedData[i]))}");
             }
-
+            if (plaintext != null) Debug.WriteLine($"    [AesSivHelper.S2V] Plaintext: {Convert.ToBase64String(plaintext)}");
+#endif
             if (associatedData.Length > 126)
             {
                 throw new ArgumentException("too many Associated Data fields");
@@ -137,7 +123,6 @@ namespace UvfLib.V3
 
             //byte[] finalMac = ComputeAesCmac(key, t); // Old manual CMAC
             byte[] finalMac = MacWithBouncyCastle(cmac, t);
-            Debug.WriteLine("  [AesSivHelper.S2V] End");
             return finalMac;
         }
 
@@ -304,11 +289,6 @@ namespace UvfLib.V3
         /// <exception cref="AuthenticationFailedException">If authentication fails</exception>
         public static byte[] Decrypt(byte[] key, byte[] ciphertext, byte[] ad)
         {
-            Debug.WriteLine("[AesSivHelper.Decrypt] Start");
-            Debug.WriteLine($"[AesSivHelper.Decrypt] Key: {Convert.ToBase64String(key)}");
-            Debug.WriteLine($"[AesSivHelper.Decrypt] Ciphertext (SIV + CTR): {Convert.ToBase64String(ciphertext)}");
-            Debug.WriteLine($"[AesSivHelper.Decrypt] AD: {(ad == null ? "null" : Convert.ToBase64String(ad))}");
-
             if (key == null || key.Length != 64)
             {
                 throw new ArgumentException("Key must be 64 bytes for AES-SIV-512", nameof(key));
@@ -324,16 +304,13 @@ namespace UvfLib.V3
             byte[] k2 = new byte[32];
             Buffer.BlockCopy(key, 0, k1, 0, 32);
             Buffer.BlockCopy(key, 32, k2, 0, 32);
-            //Debug.WriteLine($"[AesSivHelper.Decrypt] K1 (MAC Key): {Convert.ToBase64String(k1)}");
-            //Debug.WriteLine($"[AesSivHelper.Decrypt] K2 (CTR Key): {Convert.ToBase64String(k2)}");
 
             // Extract SIV (first 16 bytes) and the actual ciphertext
             byte[] siv = new byte[BLOCK_SIZE];
             byte[] actualCiphertext = new byte[ciphertext.Length - BLOCK_SIZE];
             Buffer.BlockCopy(ciphertext, 0, siv, 0, BLOCK_SIZE);
             Buffer.BlockCopy(ciphertext, BLOCK_SIZE, actualCiphertext, 0, actualCiphertext.Length);
-            //Debug.WriteLine($"[AesSivHelper.Decrypt] Extracted SIV (Tag): {Convert.ToBase64String(siv)}");
-            //Debug.WriteLine($"[AesSivHelper.Decrypt] Extracted CTR Ciphertext: {Convert.ToBase64String(actualCiphertext)}");
+
 
             // Step 1: Decrypt the ciphertext using AES-CTR with modified SIV as counter
             byte[] modifiedSiv = new byte[BLOCK_SIZE];
@@ -341,26 +318,17 @@ namespace UvfLib.V3
             // Clear the most significant bit in the last 32 bits
             modifiedSiv[8] &= 0x7F;
             modifiedSiv[12] &= 0x7F;
-            //Debug.WriteLine($"[AesSivHelper.Decrypt] Modified SIV (CTR Counter IV): {Convert.ToBase64String(modifiedSiv)}");
-
-            //Debug.WriteLine("[AesSivHelper.Decrypt] Decrypting with CTR...");
             byte[] plaintext = EncryptWithCtr(k2, modifiedSiv, actualCiphertext); // CTR encryption is its own inverse
-            //Debug.WriteLine($"[AesSivHelper.Decrypt] CTR Plaintext: {Convert.ToBase64String(plaintext)} ({Encoding.UTF8.GetString(plaintext)})");
 
             // Step 2: Recalculate SIV using S2V on the decrypted plaintext and associated data
-            //Debug.WriteLine("[AesSivHelper.Decrypt] Recalculating S2V for verification...");
             byte[] calculatedSiv = S2V(k1, plaintext, ad != null ? new[] { ad } : Array.Empty<byte[]>());
-            //Debug.WriteLine($"[AesSivHelper.Decrypt] Recalculated S2V (Tag): {Convert.ToBase64String(calculatedSiv)}");
 
             // Step 3: Compare the original SIV with the recalculated SIV
             if (!CryptographicOperations.FixedTimeEquals(siv, calculatedSiv))
             {
-                //Debug.WriteLine("[AesSivHelper.Decrypt] !!! Authentication Failed: SIV mismatch !!!");
                 throw new AuthenticationFailedException("Authentication failed");
             }
 
-            //Debug.WriteLine("[AesSivHelper.Decrypt] Authentication Succeeded");
-            //Debug.WriteLine("[AesSivHelper.Decrypt] End");
             return plaintext;
         }
     }

@@ -166,7 +166,6 @@ namespace UvfLib.V3
             // Copy nonce to beginning of ciphertext
             perChunkNonce.CopyTo(ciphertextChunk.Span);
             
-            Debug.WriteLine($"Encrypting chunk {chunkNumber} with perChunkNonce: {Convert.ToHexString(perChunkNonce)} and AAD: {Convert.ToHexString(aad)}");
 
             try
             {
@@ -227,7 +226,6 @@ namespace UvfLib.V3
             _random.GetBytes(nonce);
 
             // Debug: Log nonce values
-            Debug.WriteLine($"Encrypting chunk {chunkNumber} with nonce: {BitConverter.ToString(nonce)}");
 
             // Copy nonce to beginning of ciphertext
             nonce.CopyTo(ciphertextChunk);
@@ -238,7 +236,6 @@ namespace UvfLib.V3
             byte[] aad = ByteBuffers.Concat(chunkNumberBytes, headerNonce);
 
             // Debug: Log AAD
-            Debug.WriteLine($"Encrypting chunk {chunkNumber} with AAD length: {aad.Length}");
 
             try
             {
@@ -257,9 +254,6 @@ namespace UvfLib.V3
                     ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE, cleartextChunk.Length).Span,
                     tag,
                     aad);
-
-                // Debug: Log tag
-                Debug.WriteLine($"Encryption tag for chunk {chunkNumber}: {BitConverter.ToString(tag)}");
 
                 // Copy tag to output
                 tag.CopyTo(ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE + cleartextChunk.Length, Constants.GCM_TAG_SIZE));
@@ -301,7 +295,6 @@ namespace UvfLib.V3
             ReadOnlySpan<byte> tag = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE + payloadSize, Constants.GCM_TAG_SIZE).Span;
             ReadOnlySpan<byte> ciphertextPayload = ciphertextChunk.Slice(Constants.GCM_NONCE_SIZE, payloadSize).Span;
 
-            Debug.WriteLine($"Decrypting chunk {chunkNumber} with nonce: {Convert.ToHexString(nonce)}, AAD: {Convert.ToHexString(aad)}, tag: {Convert.ToHexString(tag)}");
             
             try
             {
@@ -410,10 +403,7 @@ namespace UvfLib.V3
                 byte[] headerNonce = headerImpl.GetNonce();
                 byte[] chunkNumberBytes = ByteBuffers.LongToByteArray(chunkNumber);
                 aad = ByteBuffers.Concat(chunkNumberBytes, headerNonce);
-                Debug.WriteLine($"Decrypting chunk {chunkNumber} with AAD length: {aad.Length}");
-                Debug.WriteLine($"Decrypting chunk {chunkNumber} with size: {ciphertextChunk.Length}");
-                Debug.WriteLine($"Decrypting chunk {chunkNumber} with nonce: {BitConverter.ToString(nonce)}");
-                Debug.WriteLine($"Decryption tag for chunk {chunkNumber}: {BitConverter.ToString(tag)}");
+
             }
             else if (authenticate)
             {

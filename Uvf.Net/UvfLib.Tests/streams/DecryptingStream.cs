@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using UvfLib.Api;
 using UvfLib.Common;
+using UvfLib.V3;
 
 namespace UvfLib.Tests.Streams
 {
