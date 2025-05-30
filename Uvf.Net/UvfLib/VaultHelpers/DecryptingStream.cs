@@ -38,6 +38,8 @@ namespace UvfLib.VaultHelpers
         private long _currentChunkNumber = 0;
         private bool _isDisposed = false;
         private bool _endOfStreamReached = false;
+        private long _virtualPosition = 0;  // Track position in decrypted stream
+        private readonly long _virtualLength;  // Total decrypted length
 
 #if DEBUG
         private readonly PerformanceMetrics _metrics;
@@ -59,13 +61,20 @@ namespace UvfLib.VaultHelpers
                 Operation1Name = "StreamRead",
                 Operation2Name = "AADPrep",
                 Operation3Name = "DecryptOp",
-                Operation4Name = null // Not measuring copy to output buffer here, focus on crypto path
+                Operation4Name = "Seek" // Added seek operation tracking
             };
 #endif
 
             if (!_inputStream.CanRead) throw new ArgumentException("Input stream must be readable.", nameof(inputStream));
             if (_cryptor.FileHeaderCryptor() == null || _cryptor.FileContentCryptor() == null)
                 throw new InvalidOperationException("Cryptor not fully initialized for file operations.");
+
+            // Calculate virtual length if input stream supports seeking
+            if (_inputStream.CanSeek)
+            {
+                long encryptedLength = _inputStream.Length;
+                _virtualLength = CalculateDecryptedLength(encryptedLength);
+            }
 
             // Allocate buffers using the constants
             _ciphertextChunkBuffer = new byte[CIPHERTEXT_CHUNK_SIZE];
@@ -91,6 +100,28 @@ namespace UvfLib.VaultHelpers
             headerNonce.CopyTo(_aadBuffer.AsSpan(8)); // Copy header nonce to the latter part of AAD buffer
         }
 
+        private long CalculateDecryptedLength(long encryptedLength)
+        {
+            // Remove header size
+            long contentLength = encryptedLength - FileHeaderImpl.SIZE;
+            if (contentLength <= 0) return 0;
+
+            // Calculate number of complete chunks
+            long completeChunks = contentLength / CIPHERTEXT_CHUNK_SIZE;
+            long remainingBytes = contentLength % CIPHERTEXT_CHUNK_SIZE;
+
+            // Each chunk has GCM_NONCE_SIZE + GCM_TAG_SIZE overhead
+            long decryptedBytes = completeChunks * PLAINTEXT_CHUNK_SIZE;
+
+            // Handle last partial chunk if any
+            if (remainingBytes > V3.Constants.GCM_NONCE_SIZE + V3.Constants.GCM_TAG_SIZE)
+            {
+                decryptedBytes += remainingBytes - (V3.Constants.GCM_NONCE_SIZE + V3.Constants.GCM_TAG_SIZE);
+            }
+
+            return decryptedBytes;
+        }
+
         public override int Read(byte[] buffer, int offset, int count)
         {
             CheckDisposed();
@@ -99,24 +130,52 @@ namespace UvfLib.VaultHelpers
             if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
             if (buffer.Length - offset < count) throw new ArgumentException("Invalid offset length combination.");
 
+            // Check if we've reached the end of the decrypted stream
+            if (_virtualPosition >= _virtualLength)
+            {
+                return 0;
+            }
+
+            // Adjust count if it would read beyond the end of the stream
+            count = (int)Math.Min(count, _virtualLength - _virtualPosition);
+
             int totalBytesRead = 0;
             while (count > 0)
             {
-                // If plaintext buffer is exhausted, try reading and decrypting the next chunk
-                if (_plaintextBufferPosition >= _plaintextBufferLength)
+                // Calculate which chunk we need based on virtual position
+                long requiredChunk = GetChunkNumber(_virtualPosition);
+                
+                // If we're not at the right chunk or buffer is empty, seek to and decrypt the needed chunk
+                if (requiredChunk != _currentChunkNumber || _plaintextBufferLength == 0)
                 {
-                    if (!ReadAndDecryptNextChunk())
-                    {
-                        break; // End of stream reached, return what we have
-                    }
+                    SeekToChunk(requiredChunk);
                 }
 
-                // Copy available data from plaintext buffer to output buffer
-                int bytesAvailable = _plaintextBufferLength - _plaintextBufferPosition;
-                int bytesToCopy = Math.Min(count, bytesAvailable);
-                _plaintextChunkBuffer.Slice(_plaintextBufferPosition, bytesToCopy).Span.CopyTo(buffer.AsSpan(offset, bytesToCopy));
+                // Calculate where in the current chunk's buffer we should start reading
+                int bufferOffset = GetOffsetInChunk(_virtualPosition);
+                
+                // Calculate how many bytes we can read from this chunk
+                int bytesAvailableInChunk = _plaintextBufferLength - bufferOffset;
+                if (bytesAvailableInChunk <= 0)
+                {
+                    // We've reached the end of the current chunk
+                    if (!ReadAndDecryptNextChunk())
+                    {
+                        break; // End of stream reached
+                    }
+                    continue; // Retry with the new chunk
+                }
 
-                _plaintextBufferPosition += bytesToCopy;
+                // Calculate how many bytes to copy from this chunk
+                int bytesToCopy = Math.Min(count, bytesAvailableInChunk);
+
+                // Copy the data
+                _plaintextChunkBuffer.Slice(bufferOffset, bytesToCopy).Span.CopyTo(
+                    buffer.AsSpan(offset, bytesToCopy));
+
+                // Update positions and counters
+                _virtualPosition += bytesToCopy;
+                _plaintextBufferPosition = bufferOffset + bytesToCopy;
                 offset += bytesToCopy;
                 count -= bytesToCopy;
                 totalBytesRead += bytesToCopy;
@@ -241,18 +300,108 @@ namespace UvfLib.VaultHelpers
         // --- Stream abstract members implementation ---
 
         public override bool CanRead => true;
-        public override bool CanSeek => false;
+        public override bool CanSeek => _inputStream.CanSeek;
         public override bool CanWrite => false;
 
-        public override long Length => throw new NotSupportedException("DecryptingStream is non-seekable.");
+        public override long Length => _virtualLength;
+        
         public override long Position
         {
-            get => throw new NotSupportedException("DecryptingStream is non-seekable.");
-            set => throw new NotSupportedException("DecryptingStream is non-seekable.");
+            get => _virtualPosition;
+            set => Seek(value, SeekOrigin.Begin);
         }
 
         public override void Flush() { /* No-op for read-only stream */ }
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException("DecryptingStream is non-seekable.");
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            CheckDisposed();
+            if (!_inputStream.CanSeek)
+                throw new NotSupportedException("Underlying stream must support seeking.");
+
+            // Calculate the target position
+            long targetPosition;
+            switch (origin)
+            {
+                case SeekOrigin.Begin:
+                    targetPosition = offset;
+                    break;
+                case SeekOrigin.Current:
+                    targetPosition = _virtualPosition + offset;
+                    break;
+                case SeekOrigin.End:
+                    targetPosition = _virtualLength + offset;
+                    break;
+                default:
+                    throw new ArgumentException("Invalid seek origin", nameof(origin));
+            }
+
+            if (targetPosition < 0)
+                throw new IOException("Cannot seek before the beginning of the stream.");
+
+            if (targetPosition > _virtualLength)
+                targetPosition = _virtualLength;
+
+            // If we're already at the right position, no need to do anything
+            if (targetPosition == _virtualPosition)
+                return _virtualPosition;
+
+            // Calculate which chunk we need and the offset within it
+            long targetChunk = GetChunkNumber(targetPosition);
+            int offsetInChunk = GetOffsetInChunk(targetPosition);
+
+            // Seek to the correct chunk and position within it
+            SeekToChunk(targetChunk);
+            _plaintextBufferPosition = offsetInChunk;
+            _virtualPosition = targetPosition;
+
+            return _virtualPosition;
+        }
+
+        private long GetChunkNumber(long position)
+        {
+            return position / PLAINTEXT_CHUNK_SIZE;
+        }
+
+        private int GetOffsetInChunk(long position)
+        {
+            return (int)(position % PLAINTEXT_CHUNK_SIZE);
+        }
+
+        private long GetChunkStartPosition(long chunkNumber)
+        {
+            return FileHeaderImpl.SIZE + (chunkNumber * CIPHERTEXT_CHUNK_SIZE);
+        }
+
+        private void SeekToChunk(long targetChunkNumber)
+        {
+            if (targetChunkNumber == _currentChunkNumber && _plaintextBufferLength > 0)
+            {
+                // Already at the correct chunk
+                return;
+            }
+
+#if DEBUG
+            _metrics.StartTiming();
+#endif
+
+            // Position the stream at the start of the target chunk
+            long targetPosition = GetChunkStartPosition(targetChunkNumber);
+            _inputStream.Position = targetPosition;
+
+            // Reset state
+            _currentChunkNumber = targetChunkNumber;
+            _plaintextBufferPosition = 0;
+            _plaintextBufferLength = 0;
+            _endOfStreamReached = false;
+
+            // Read and decrypt the chunk
+            ReadAndDecryptNextChunk();
+
+#if DEBUG
+            _metrics.StopTiming(ref _metrics.TotalOperation4TimeMs); // Seek
+#endif
+        }
+
         public override void SetLength(long value) => throw new NotSupportedException("DecryptingStream length cannot be set.");
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException("DecryptingStream does not support writing.");
 

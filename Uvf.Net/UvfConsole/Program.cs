@@ -361,34 +361,6 @@ namespace UvfConsole
             return bytesProcessedInThisCall;
         }
 
-        private static long CalculateExpectedDecryptedSize(long encryptedFileSize)
-        {
-            // Remove the file header size
-            long sizeWithoutHeader = encryptedFileSize - 68; // 68 bytes header
-
-            // Calculate how many complete chunks we have (each chunk has 28 bytes overhead)
-            long totalOverhead = 0;
-            long remainingBytes = sizeWithoutHeader;
-            
-            while (remainingBytes > 0)
-            {
-                // Each chunk has GCM_NONCE_SIZE + GCM_TAG_SIZE (28 bytes) overhead
-                totalOverhead += Constants.GCM_NONCE_SIZE + Constants.GCM_TAG_SIZE;
-                remainingBytes -= Constants.CHUNK_SIZE;
-            }
-
-            // Expected decrypted size = encrypted size - header - total chunk overhead
-            long expectedSize = encryptedFileSize - 68 - totalOverhead;
-
-            Console.WriteLine($"\nDebug - Expected Decrypted Size Calculation:");
-            Console.WriteLine($"  Encrypted size: {encryptedFileSize:N0} bytes");
-            Console.WriteLine($"  Header size: 68 bytes");
-            Console.WriteLine($"  Total chunk overhead: {totalOverhead:N0} bytes");
-            Console.WriteLine($"  Expected decrypted size: {expectedSize:N0} bytes\n");
-
-            return expectedSize;
-        }
-
         private static long DecryptDirectory(Vault vault, DirectoryMetadata currentDirectoryMetadata, string currentDirPhysicalVaultPath, string targetDecryptedPath)
         {
             Console.WriteLine($"  DEBUG: DecryptDirectory START - CurrentDirPhysicalPath: {currentDirPhysicalVaultPath}, TargetDecryptedPath: {targetDecryptedPath}, CurrentDirMetadata (DirId: {currentDirectoryMetadata.DirId}, SeedId: {currentDirectoryMetadata.SeedId})");
